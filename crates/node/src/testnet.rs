@@ -129,6 +129,7 @@ pub fn generate_network<R: RngCore + CryptoRng>(
             block_time_ms: 1_000,
             fee_payout_script,
             create_empty_blocks: false,
+            min_fee_per_kvb: wharfedale_mempool::DEFAULT_MIN_FEE_PER_KVB,
             p2p: P2p { listen_addr: node.listen.clone(), persistent_peers: peers_of(i), persistent_peers_only: true },
             rpc: node.rpc.clone().map(|listen_addr| Rpc { listen_addr }),
         }

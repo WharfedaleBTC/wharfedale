@@ -78,7 +78,7 @@ enum Cmd {
         #[arg(long)]
         asset: Option<String>,
         /// Fee in fee-asset units.
-        #[arg(long, default_value_t = 1_000)]
+        #[arg(long, default_value_t = wharfedale_sdk::wallet::DEFAULT_FEE)]
         fee: u64,
     },
     /// Issue a new asset (explicit amounts), paid confidentially to this key.
@@ -91,7 +91,7 @@ enum Cmd {
         /// Reissuance tokens to create (0 = fixed supply).
         #[arg(long, default_value_t = 1)]
         tokens: u64,
-        #[arg(long, default_value_t = 1_000)]
+        #[arg(long, default_value_t = wharfedale_sdk::wallet::DEFAULT_FEE)]
         fee: u64,
     },
     /// Reissue more of an asset, spending (and keeping) its reissuance token.
@@ -102,7 +102,7 @@ enum Cmd {
         asset: String,
         #[arg(long)]
         amount: u64,
-        #[arg(long, default_value_t = 1_000)]
+        #[arg(long, default_value_t = wharfedale_sdk::wallet::DEFAULT_FEE)]
         fee: u64,
     },
     /// Print a key's x-only public key (untweaked), for contract parameters.
@@ -142,7 +142,7 @@ enum Cmd {
         amount: u64,
         #[arg(long)]
         asset: Option<String>,
-        #[arg(long, default_value_t = 1_000)]
+        #[arg(long, default_value_t = wharfedale_sdk::wallet::DEFAULT_FEE)]
         fee: u64,
         /// Transaction lock time (block height), for contracts that check it.
         #[arg(long)]

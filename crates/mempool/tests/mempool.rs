@@ -93,7 +93,7 @@ fn admission_rules() {
     let child = b.spend(&chained_view, &[child_op], &a.1, 1_000);
     assert_eq!(admit(&mut pool, &l, child), Err(AdmitError::MissingInput(0)));
 
-    // Fee below 100 per 1000 vbytes.
+    // Fee below the minimum rate (10 per 1 000 vbytes).
     let cheap = a.spend(&l, &[op(2)], &b.1, 1);
     assert!(matches!(admit(&mut pool, &l, cheap), Err(AdmitError::FeeTooLow { .. })));
 

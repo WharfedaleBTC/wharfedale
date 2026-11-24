@@ -38,6 +38,9 @@ pub struct NodeConfig {
     /// the next one, so the chain only grows when there is something to include.
     #[serde(default)]
     pub create_empty_blocks: bool,
+    /// Lowest fee rate the mempool accepts, in fee-asset units per 1 000 vbytes.
+    #[serde(default = "default_min_fee_per_kvb")]
+    pub min_fee_per_kvb: u64,
     pub p2p: P2p,
     /// JSON-RPC server; absent = disabled.
     #[serde(default)]
@@ -59,6 +62,10 @@ pub struct P2p {
     /// Connect only to `persistent_peers`.
     #[serde(default = "default_true")]
     pub persistent_peers_only: bool,
+}
+
+fn default_min_fee_per_kvb() -> u64 {
+    wharfedale_mempool::DEFAULT_MIN_FEE_PER_KVB
 }
 
 fn default_block_time_ms() -> u64 {

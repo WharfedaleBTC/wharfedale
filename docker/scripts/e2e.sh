@@ -29,13 +29,13 @@ FUND=$(w node0 send --key /net/faucet.json --to "$ALICE" --amount 5000000)
 w node3 wait-tx --txid "$FUND" --timeout 60 >/dev/null || fail "faucet tx not confirmed on node3"
 pass "faucet → alice (confidential) confirmed: gossip node0 → proposer, block seen by node3"
 
-PAY=$(w node2 send --key "$D/alice.json" --to "$BOB" --amount 1000000 --fee 1000)
+PAY=$(w node2 send --key "$D/alice.json" --to "$BOB" --amount 1000000)
 w node1 wait-tx --txid "$PAY" --timeout 60 >/dev/null || fail "alice tx not confirmed on node1"
 pass "alice → bob (confidential input and outputs) confirmed"
 
 A=$(w node1 balance --key "$D/alice.json" --asset "$FEE_ASSET")
 B=$(w node3 balance --key "$D/bob.json" --asset "$FEE_ASSET")
-[ "$A" = "3999000" ] || fail "alice balance $A, expected 3999000"
+[ "$A" = "3999900" ] || fail "alice balance $A, expected 3999900 (default fee 100)"
 [ "$B" = "1000000" ] || fail "bob balance $B, expected 1000000"
 pass "unblinded balances: alice $A, bob $B"
 
@@ -87,7 +87,7 @@ pass "contract refuses alice's signature"
 A0=$(w node0 balance --key "$D/alice.json" --asset "$FEE_ASSET")
 CS=$(w node3 contract-spend "${P2PK[@]}" --witness "$D/bob.wit" --to "$ALICE" --amount 200000)
 w node0 wait-tx --txid "$CS" --timeout 60 >/dev/null || fail "contract spend not confirmed"
-[ "$(w node0 contract-balance "${P2PK[@]}" --asset "$FEE_ASSET")" = "99000" ] || fail "contract change"
+[ "$(w node0 contract-balance "${P2PK[@]}" --asset "$FEE_ASSET")" = "99900" ] || fail "contract change"
 [ "$(w node0 balance --key "$D/alice.json" --asset "$FEE_ASSET")" = "$((A0 + 200000))" ] || fail "alice did not receive"
 pass "bob's signature spends the contract (Simplicity executed by every validator)"
 

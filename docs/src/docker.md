@@ -51,7 +51,7 @@ The faucet key is `/net/faucet.json` inside the volume:
 1. node0 answers, and an idle chain does not grow (no empty blocks).
 2. faucet → alice (`wfc1` address) submitted to node0 is confirmed as seen by node3.
 3. alice → bob (confidential input and outputs) submitted to node2 is confirmed as seen by node1.
-4. Unblinded balances: alice 3 999 000, bob 1 000 000 (fee 1 000).
+4. Unblinded balances: alice 3 999 900, bob 1 000 000 (default fee 100).
 5. The payment shows value commitments on chain (Esplora `/tx`).
 6. alice issues 1 000 units + 1 reissuance token; reissues 500 via node2.
 7. Esplora: the asset record shows 1 500 issued; `outspends` shows the spent faucet output.

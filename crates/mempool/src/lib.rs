@@ -9,6 +9,10 @@ use std::time::{Duration, Instant};
 use elements::{AssetId, OutPoint, Transaction, Txid, Wtxid};
 use wharfedale_ledger::{check_tx, check_tx_stateless, ChainCtx, LedgerView, TxError, VerifyCache};
 
+/// Default minimum fee rate: 10 fee-asset units per 1 000 vbytes (0.01 sat/vB for a
+/// bitcoin-like fee asset; Liquid's is 0.1). Nodes set their own (`min_fee_per_kvb`).
+pub const DEFAULT_MIN_FEE_PER_KVB: u64 = 10;
+
 /// Admission policy (not consensus).
 #[derive(Clone, Debug)]
 pub struct Policy {
@@ -28,7 +32,7 @@ impl Policy {
     pub fn new(fee_asset: AssetId) -> Self {
         Self {
             fee_asset,
-            min_fee_per_kvb: 100,
+            min_fee_per_kvb: DEFAULT_MIN_FEE_PER_KVB,
             max_pool_vsize: 300_000_000,
             expiry: Duration::from_secs(24 * 3600),
             rejected_cache: 10_000,

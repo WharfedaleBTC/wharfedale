@@ -210,7 +210,7 @@ pub async fn start(home: &Path) -> Result<NodeHandle> {
     let node_state = NodeState {
         genesis_hash: store.genesis_hash()?,
         store: Arc::new(store),
-        mempool: Arc::new(Mutex::new(Mempool::new(Policy::new(fee_asset)))),
+        mempool: Arc::new(Mutex::new(Mempool::new(Policy { min_fee_per_kvb: config.min_fee_per_kvb, ..Policy::new(fee_asset) }))),
         cache: Arc::new(VerifyCache::new()),
         chain_id: genesis.chain_id.clone(),
         fee_asset,

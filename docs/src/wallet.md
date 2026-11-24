@@ -27,7 +27,7 @@ wharfedale-wallet --rpc http://127.0.0.1:18443 keygen --out alice.json
 | `keygen --out FILE` | New key; prints the confidential address |
 | `address --key FILE [--explicit \| --script]` | `wfc1…` (default), `wf1…`, or output script hex |
 | `balance --key FILE [--asset ID]` | Unspent per asset; confidential coins unblinded; excludes coins spent in the mempool |
-| `send --key FILE --to ADDR\|SCRIPT --amount N [--asset ID] [--fee N]` | Pay; prints txid. Default asset: `fee_asset`; default fee 1 000 |
+| `send --key FILE --to ADDR\|SCRIPT --amount N [--asset ID] [--fee N]` | Pay; prints txid. Default asset: `fee_asset`; default fee 100 (`wharfedale_sdk::wallet::DEFAULT_FEE`) |
 | `issue --key FILE --amount N [--tokens T] [--fee N]` | New asset (explicit amounts) to self, confidentially; prints txid, asset id, token id |
 | `reissue --key FILE --asset ID --amount N [--fee N]` | Reissue with a held token (token returned to self); prints txid |
 | `pubkey --key FILE` | x-only public key (untweaked), for contract arguments |

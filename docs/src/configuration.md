@@ -51,6 +51,7 @@ role              = "validator"                # or "full"; default "validator"
 block_time_ms     = 1000                       # Malachite target_time per height
 fee_payout_script = "5120…"                    # validators: taproot scriptPubKey for coinbase payouts
 create_empty_blocks = false                    # default: blocks only when there are transactions
+min_fee_per_kvb   = 10                         # lowest fee rate the mempool accepts, units per 1 000 vbytes
 
 [p2p]
 listen_addr           = "/ip4/0.0.0.0/tcp/27000"

@@ -19,7 +19,7 @@ pub struct Mempool {
 | Setting | Default |
 |---|---|
 | `fee_asset` | `genesis.fee_asset`; only fees in this asset count |
-| `min_fee_per_kvb` | 100 fee-asset units per 1000 vbytes |
+| `min_fee_per_kvb` | 10 fee-asset units per 1 000 vbytes by default (0.01 sat/vB for a bitcoin-like fee asset); `min_fee_per_kvb` in `config.toml` |
 | `max_pool_vsize` | 300 000 000 |
 | `expiry` | 24 h |
 | `rejected_cache` | 10 000 wtxids |

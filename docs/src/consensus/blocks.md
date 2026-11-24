@@ -79,7 +79,7 @@ liveness test uses it).
 
 Optional. It exists only to pay the block's fees to the proposer, so a proposer adds one when
 its transactions pay fees (every standard transaction does: the mempool's minimum fee rate is
-100 per kvB) and leaves it out otherwise; fees in a block without one are burned. When
+10 per kvB by default) and leaves it out otherwise; fees in a block without one are burned. When
 present it is `txs[0]`:
 - one input with a null prevout; `script_sig` = `push_int(height) ‖ push("wharfedale")`
   (2–100 bytes, starts with the height: BIP34, unique txid);

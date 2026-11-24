@@ -13,11 +13,17 @@
 | `MAX_BLOCK_SIMPLICITY_COST` | TBD | Consensus |
 | Timestamp drift | 10 s | Proposal validity |
 | MTP window | 11 blocks | Consensus |
-| `MIN_FEERATE` | TBD, in `FEE_ASSET` | Mempool policy |
+| `min_fee_per_kvb` | 10 units per 1 000 vbytes (default; `config.toml`) | Mempool policy |
+| Wallet default fee (`DEFAULT_FEE`) | 100 units, flat | SDKs, CLI, web app |
 | `MAX_POOL` | 300 MB vsize | Mempool policy |
 | `MEMPOOL_EXPIRY` | 24 h | Mempool policy |
 | Gossip batch | 50 ms / 64 KiB | Mempool policy |
 | Undo retention N | 1 000 blocks | Storage |
+
+The fee asset is the genesis-issued native asset. The deployments present it as Wrapped
+Bitcoin (WBTC, 8 decimals: 1 unit = 1 sat); name, ticker and decimals are web-app config
+(`nativeAsset`), not chain data. Its supply is fixed at genesis: 20 × 10¹² units = 200 000
+WBTC to the faucet key (`FAUCET_OUTPUTS` × `FAUCET_OUTPUT_VALUE` in `testnet.rs`).
 
 ## Open decisions (settle before genesis)
 
