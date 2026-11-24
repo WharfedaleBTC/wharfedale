@@ -7,3 +7,7 @@ src = "src"
 [output.html]
 default-theme = "light"
 preferred-dark-theme = "navy"
+# GitHub Pages project site: https://wharfedalebtc.github.io/wharfedale/
+site-url = "/wharfedale/"
+git-repository-url = "https://github.com/WharfedaleBTC/wharfedale"
+edit-url-template = "https://github.com/WharfedaleBTC/wharfedale/edit/master/docs/{path}"

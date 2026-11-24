@@ -2,10 +2,10 @@
 
 | Repository | Contents |
 |---|---|
-| `wharfedale` | This workspace |
+| `wharfedale` ([github.com/WharfedaleBTC/wharfedale](https://github.com/WharfedaleBTC/wharfedale)) | This workspace |
 | `wharfedale-sdk-rs` | Rust client SDK; path dependency of `wharfedale-wallet` ([SDKs](sdk.md)) |
 | `wharfedale-sdk-ts` | TypeScript client SDK ([SDKs](sdk.md)) |
-| `malachite` (fork of `circlefin/malachite`) | Upstream `a453b32` (v0.8.2) + branch `wharfedale/mempool-channel` ([patch](consensus/mempool-channel.md)). Docker builds copy this checkout |
+| `malachite` ([github.com/WharfedaleBTC/malachite](https://github.com/WharfedaleBTC/malachite), fork of `circlefin/malachite`) | `main` = upstream `a453b32` (v0.8.2); the patch is branch `wharfedale/mempool-channel` ([patch](consensus/mempool-channel.md)). Docker builds copy this checkout |
 
 Local layout:
 

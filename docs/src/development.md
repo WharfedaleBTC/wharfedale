@@ -64,3 +64,11 @@ mdbook serve docs
 | M4 ✅ | Confidential values and assets; issuance and reissuance; wallet blinding; Esplora API |
 | M5 ✅ | Simplicity spends (C library via FFI); wallet contracts (SimplicityHL) |
 | M6 | Parallel verification, mempool Simplicity limits, property tests and fuzzing, audit |
+
+## CI
+
+| Workflow | Does |
+|---|---|
+| `.github/workflows/docs.yml` | `mdbook build docs` (mdBook v0.5.4, checksum-verified) on pull requests; on push to `master` also deploys to GitHub Pages: <https://wharfedalebtc.github.io/wharfedale/> |
+
+GitHub Pages must use **Settings → Pages → Source: GitHub Actions** (one-time).
