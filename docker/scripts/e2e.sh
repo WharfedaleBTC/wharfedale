@@ -99,12 +99,16 @@ TS=$(w node0 contract-spend "${TL[@]}" --witness "$D/bob.wit" --to "$BOB" --amou
 w node1 wait-tx --txid "$TS" --timeout 60 >/dev/null || fail "timelock spend not confirmed"
 pass "timelock contract: refused with lock time $((AFTER - 1)), spent with $AFTER"
 
+FT=$(w rpc0 send --key /net/faucet.json --to "$BOB" --amount 70000)
+w node3 wait-tx --txid "$FT" --timeout 60 >/dev/null || fail "transaction submitted to the full node not confirmed"
+pass "full node rpc0 relays a transaction the validators confirm"
+
 H=$(w node0 rpc getblockcount)
-for n in node1 node2 node3; do w "$n" wait-height --height "$H" --timeout 30 >/dev/null; done
+for n in node1 node2 node3 rpc0; do w "$n" wait-height --height "$H" --timeout 30 >/dev/null; done
 REF=$(w node0 rpc getblockhash "$H")
-for n in node1 node2 node3; do
+for n in node1 node2 node3 rpc0; do
   [ "$(w "$n" rpc getblockhash "$H")" = "$REF" ] || fail "$n disagrees at height $H"
 done
-pass "all 4 nodes agree on block $H"
+pass "all 4 validators and the full node agree on block $H"
 
 echo "PASS"

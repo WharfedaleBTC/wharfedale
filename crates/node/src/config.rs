@@ -8,13 +8,29 @@ use malachitebft_app_channel::app::config::NodeConfig as MalachiteNodeConfig;
 use malachitebft_config::{ConsensusConfig, DiscoveryConfig, P2pConfig, ValuePayload, ValueSyncConfig};
 use serde::{Deserialize, Serialize};
 
+/// What a node does in consensus.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    /// Proposes and votes with `keys/validator.json`, which must be in genesis.
+    #[default]
+    Validator,
+    /// Follows the chain (consensus gossip and value sync), validates every block, keeps the
+    /// full state, serves RPC and relays transactions; never proposes or votes. Needs no
+    /// validator key or fee script.
+    Full,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeConfig {
     pub moniker: String,
+    #[serde(default)]
+    pub role: Role,
     /// Target time between blocks (Malachite `target_time`).
     #[serde(default = "default_block_time_ms")]
     pub block_time_ms: u64,
-    /// Hex taproot scriptPubKey (`5120…`) the coinbase pays fees to; checked at startup.
+    /// Hex taproot scriptPubKey (`5120…`) the coinbase pays fees to; checked at startup on
+    /// validators, unused on full nodes.
     #[serde(default)]
     pub fee_payout_script: String,
     pub p2p: P2p,

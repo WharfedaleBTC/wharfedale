@@ -27,6 +27,7 @@ use tracing::{error, Instrument};
 use wharfedale_chain::Genesis;
 use wharfedale_consensus_ctx::codec::ProtobufCodec;
 use wharfedale_consensus_ctx::{validator_set, Address, Ed25519Signer, Ed25519Verifier};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
@@ -37,8 +38,8 @@ use wharfedale_store::Store;
 
 use crate::gossip;
 
-use crate::app::{self, App};
-use crate::config::NodeConfig;
+use crate::app::{self, App, Proposer};
+use crate::config::{NodeConfig, Role};
 use crate::keys;
 
 pub struct Home(pub PathBuf);
@@ -70,14 +71,24 @@ pub struct NodeHandle {
     pub engine: EngineHandle,
     /// Committed tip height.
     pub tip: tokio::sync::watch::Receiver<u64>,
-    /// Gossip and RPC tasks.
+    /// Gossip and indexer tasks.
     pub tasks: Vec<JoinHandle<()>>,
+    /// The RPC server, stopped gracefully: its open connections hold the database.
+    rpc: Option<(tokio::sync::oneshot::Sender<()>, JoinHandle<()>)>,
+    /// The indexer runs blocking work that an abort can't interrupt: stopped by flag, awaited.
+    indexer: (Arc<AtomicBool>, JoinHandle<()>),
 }
 
 impl NodeHandle {
     /// Stops the engine and the application task and waits for both to exit, so the WAL and
     /// the database are released.
     pub async fn shutdown(self) {
+        if let Some((stop, task)) = self.rpc {
+            let _ = stop.send(());
+            if tokio::time::timeout(std::time::Duration::from_secs(10), task).await.is_err() {
+                tracing::warn!("RPC server did not stop within 10 s");
+            }
+        }
         self.engine.actor.stop(Some("shutdown".into()));
         let _ = tokio::time::timeout(std::time::Duration::from_secs(10), self.engine.handle).await;
         for task in &self.tasks {
@@ -88,10 +99,17 @@ impl NodeHandle {
         for task in self.tasks {
             let _ = task.await;
         }
+        // The app is gone, so the tip channel is closed: the indexer exits after its current
+        // block, releasing its handle on the database.
+        let (stop, indexer) = self.indexer;
+        stop.store(true, Ordering::Relaxed);
+        if tokio::time::timeout(std::time::Duration::from_secs(30), indexer).await.is_err() {
+            tracing::warn!("indexer did not stop within 30 s");
+        }
     }
 }
 
-/// Starts a validator (or full node when `keys/validator.json` is absent) from `home`.
+/// Starts a node from `home`: a validator or a full node, by `config.role`.
 pub async fn start(home: &Path) -> Result<NodeHandle> {
     let home = Home(home.to_path_buf());
     let config = NodeConfig::load(home.config())?;
@@ -102,40 +120,52 @@ pub async fn start(home: &Path) -> Result<NodeHandle> {
     let store = Store::open(home.store())?;
     store.init_or_check(&genesis)?;
 
-    let secret = keys::load(home.validator_key()).wrap_err("loading keys/validator.json")?;
-    let private_key = keys::private_key(secret);
-    let public_key = private_key.public_key();
-    let address = Address::from_public_key(&public_key);
-    if validator_set.get_by_address(&address).is_none() {
-        return Err(eyre!("validator key {address} is not in genesis"));
-    }
-
-    let fee_script = Script::from(hex::decode(&config.fee_payout_script).wrap_err("fee_payout_script")?);
-    // Coinbase outputs to anything else would burn the fees (or be rejected as non-standard).
-    if !fee_script.is_v1_p2tr() {
-        return Err(eyre!("fee_payout_script must be a taproot output script (OP_1 <32 bytes>)"));
-    }
     let node_secret = keys::load(home.node_key()).wrap_err("loading keys/node.json")?;
     let keypair = Keypair::ed25519_from_bytes(node_secret).map_err(|e| eyre!("node key: {e}"))?;
 
-    let signer = Ed25519Signer::new(private_key.clone());
-    let proof = signer
-        .sign_validator_proof(public_key.as_bytes().to_vec(), keypair.public().to_peer_id().to_bytes())
-        .await
-        .map_err(|e| eyre!("validator proof: {e:?}"))?;
-    let proof_bytes = ProtobufCodec.encode(&proof)?;
-    let identity = NetworkIdentity::new_validator(config.moniker.clone(), keypair, address.to_string(), proof_bytes);
+    let (address, identity, consensus, proposer) = match config.role {
+        Role::Validator => {
+            let secret = keys::load(home.validator_key()).wrap_err("loading keys/validator.json")?;
+            let private_key = keys::private_key(secret);
+            let public_key = private_key.public_key();
+            let address = Address::from_public_key(&public_key);
+            if validator_set.get_by_address(&address).is_none() {
+                return Err(eyre!("validator key {address} is not in genesis (set role = \"full\" to run a full node)"));
+            }
+            let fee_script = Script::from(hex::decode(&config.fee_payout_script).wrap_err("fee_payout_script")?);
+            // Coinbase outputs to anything else would burn the fees (or be rejected as non-standard).
+            if !fee_script.is_v1_p2tr() {
+                return Err(eyre!("fee_payout_script must be a taproot output script (OP_1 <32 bytes>)"));
+            }
+            let signer = Ed25519Signer::new(private_key.clone());
+            let proof = signer
+                .sign_validator_proof(public_key.as_bytes().to_vec(), keypair.public().to_peer_id().to_bytes())
+                .await
+                .map_err(|e| eyre!("validator proof: {e:?}"))?;
+            let proof_bytes = ProtobufCodec.encode(&proof)?;
+            let identity = NetworkIdentity::new_validator(config.moniker.clone(), keypair, address.to_string(), proof_bytes);
+            let consensus = ConsensusContext::new_validator(address, Box::new(Ed25519Verifier), Box::new(Ed25519Signer::new(private_key)));
+            (address, identity, consensus, Some(Proposer { signer, fee_script }))
+        }
+        Role::Full => {
+            // Consensus needs an address; derived from the node key, it is in no validator
+            // set, so this node is never selected to propose and never signs.
+            let address = Address::from_public_key(&keys::private_key(node_secret).public_key());
+            if validator_set.get_by_address(&address).is_some() {
+                return Err(eyre!("full node key collides with a validator"));
+            }
+            let identity = NetworkIdentity::new(config.moniker.clone(), keypair, None);
+            let consensus = ConsensusContext::new_full_node(address, Box::new(Ed25519Verifier));
+            (address, identity, consensus, None)
+        }
+    };
 
     let engine_config = config.engine_config()?;
     std::fs::create_dir_all(home.wal().parent().expect("wal dir"))?;
     let (mut channels, engine) = EngineBuilder::new(wharfedale_consensus_ctx::WharfedaleContext, engine_config)
         .with_default_wal(WalContext::new(home.wal(), ProtobufCodec))
         .with_default_network(NetworkContext::new(identity, ProtobufCodec))
-        .with_default_consensus(ConsensusContext::new_validator(
-            address,
-            Box::new(Ed25519Verifier),
-            Box::new(Ed25519Signer::new(private_key)),
-        ))
+        .with_default_consensus(consensus)
         .with_default_sync(SyncContext::new(ProtobufCodec))
         .with_default_request(RequestContext::new(100))
         .build()
@@ -163,15 +193,18 @@ pub async fn start(home: &Path) -> Result<NodeHandle> {
     // Gossip out: locally submitted transactions → batched publish.
     tasks.push(tokio::spawn(gossip::relay(relay_rx, channels.network.clone()).instrument(span.clone())));
     // Query indexer (Esplora): follows the committed tip.
-    {
+    let indexer_stop = Arc::new(AtomicBool::new(false));
+    let indexer = {
         let st = node_state.clone();
         let mut tip_rx = tip.clone();
-        tasks.push(tokio::spawn(
+        let stop = indexer_stop.clone();
+        tokio::spawn(
             async move {
                 loop {
                     let store = st.store.clone();
+                    let stop_now = stop.clone();
                     match tokio::task::spawn_blocking(move || -> Result<(), String> {
-                        while store.index_next().map_err(|e| e.to_string())?.is_some() {}
+                        while !stop_now.load(Ordering::Relaxed) && store.index_next().map_err(|e| e.to_string())?.is_some() {}
                         Ok(())
                     })
                     .await
@@ -180,29 +213,32 @@ pub async fn start(home: &Path) -> Result<NodeHandle> {
                         Err(e) => error!("indexer task: {e}"),
                         Ok(Ok(())) => {}
                     }
-                    if tip_rx.changed().await.is_err() {
+                    if stop.load(Ordering::Relaxed) || tip_rx.changed().await.is_err() {
                         break;
                     }
                 }
             }
             .instrument(span.clone()),
-        ));
-    }
+        )
+    };
     // RPC.
+    let mut rpc_task = None;
     if let Some(rpc) = &config.rpc {
         let addr = rpc.listen_addr.parse().wrap_err("rpc.listen_addr")?;
         let st = node_state.clone();
-        tasks.push(tokio::spawn(
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(
             async move {
-                if let Err(e) = wharfedale_rpc::serve(addr, st).await {
+                if let Err(e) = wharfedale_rpc::serve(addr, st, async move { let _ = stopped.await; }).await {
                     error!("RPC server stopped: {e}");
                 }
             }
             .instrument(span.clone()),
-        ));
+        );
+        rpc_task = Some((stop, task));
     }
 
-    let mut state = App::new(node_state, validator_set, address, signer, fee_script, config.block_time(), tip_tx)?;
+    let mut state = App::new(node_state, validator_set, address, proposer, config.block_time(), tip_tx)?;
     let app = tokio::spawn(
         async move {
             if let Err(e) = app::run(&mut state, &mut channels).await {
@@ -211,5 +247,5 @@ pub async fn start(home: &Path) -> Result<NodeHandle> {
         }
         .instrument(span),
     );
-    Ok(NodeHandle { app, engine, tip, tasks })
+    Ok(NodeHandle { app, engine, tip, tasks, rpc: rpc_task, indexer: (indexer_stop, indexer) })
 }

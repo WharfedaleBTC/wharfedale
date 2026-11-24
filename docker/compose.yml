@@ -1,11 +1,11 @@
-# Wharfedale local network: 4 validators + example and end-to-end test runners.
+# Wharfedale local network: 4 validators, 1 full node (rpc0), example and end-to-end runners.
 #
 #   docker compose -f docker/compose.yml up -d --build                 # network
 #   docker compose -f docker/compose.yml --profile example run --rm example
 #   docker compose -f docker/compose.yml --profile test run --rm e2e   # exit code = result
 #   docker compose -f docker/compose.yml down -v                       # stop, wipe chain
 #
-# RPC: node0..node3 on host ports 18443..18446.
+# RPC: node0..node3 on host ports 18443..18446; rpc0 (full node, no validator key) on 18447.
 
 name: wharfedale
 
@@ -28,6 +28,7 @@ x-runner: &runner
     node1: { condition: service_started }
     node2: { condition: service_started }
     node3: { condition: service_started }
+    rpc0: { condition: service_started }
 
 services:
   # Builds the image and generates genesis, keys and configs once (kept in the `net` volume).
@@ -39,12 +40,14 @@ services:
     command:
       - sh
       - -c
-      - "[ -f /net/faucet.json ] || wharfedale testnet --nodes 4 --home /net --hosts node0,node1,node2,node3 --chain-id wharfedale-docker"
+      - "[ -f /net/faucet.json ] || wharfedale testnet --home /net --hosts node0,node1,node2,node3 --full-hosts rpc0 --chain-id wharfedale-docker"
 
   node0: { <<: *node, command: [wharfedale, start, --home, /net/node-0], ports: ["18443:18443"] }
   node1: { <<: *node, command: [wharfedale, start, --home, /net/node-1], ports: ["18444:18443"] }
   node2: { <<: *node, command: [wharfedale, start, --home, /net/node-2], ports: ["18445:18443"] }
   node3: { <<: *node, command: [wharfedale, start, --home, /net/node-3], ports: ["18446:18443"] }
+  # Full node: follows the chain, serves RPC, relays transactions; never votes.
+  rpc0:  { <<: *node, command: [wharfedale, start, --home, /net/full-0], ports: ["18447:18443"] }
 
   # Walkthrough: faucet → alice → bob, printing every step.
   example:

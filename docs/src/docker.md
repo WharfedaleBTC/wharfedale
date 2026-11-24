@@ -1,7 +1,7 @@
 # Docker
 
-`docker/` holds one image and one Compose project: a 4-validator network, an `example`
-walkthrough and an `e2e` test.
+`docker/` holds one image and one Compose project: a network of 4 validators and one full node
+(`rpc0`), an `example` walkthrough and an `e2e` test.
 
 | File | Purpose |
 |---|---|
@@ -21,8 +21,9 @@ CLI's SDK) and `malachite/` (the fork):
 
 | Service | Command | Notes |
 |---|---|---|
-| `init` | `wharfedale testnet --nodes 4 --home /net --hosts node0,node1,node2,node3 --chain-id wharfedale-docker` | Runs once: skipped if `/net/faucet.json` exists. Builds the image |
-| `node0`…`node3` | `wharfedale start --home /net/node-<i>` | Start after `init` succeeds; P2P `27000`, RPC `18443` inside the network; RPC on host ports `18443`–`18446` |
+| `init` | `wharfedale testnet --home /net --hosts node0,node1,node2,node3 --full-hosts rpc0 --chain-id wharfedale-docker` | Runs once: skipped if `/net/faucet.json` exists. Builds the image |
+| `node0`…`node3` | `wharfedale start --home /net/node-<i>` | Validators. Start after `init` succeeds; P2P `27000`, RPC `18443` inside the network; RPC on host ports `18443`–`18446` |
+| `rpc0` | `wharfedale start --home /net/full-0` | Full node (`role = "full"`); RPC on host port `18447` |
 | `example` | `example.sh` | Profile `example` |
 | `e2e` | `e2e.sh` | Profile `test` |
 
@@ -63,4 +64,5 @@ persists across restarts. The faucet key is `/net/faucet.json` inside the volume
 9. faucet locks 300 000 to bob's p2pk contract; alice's signature can't spend it; bob's spends
    200 000 to alice (change 99 000 stays in the contract).
 10. Timelock contract (`AFTER` = tip + 3): lock time `AFTER − 1` refused; `AFTER` spends.
-11. All four nodes report the same block hash at the current height.
+11. A transaction submitted to the full node `rpc0` is confirmed by the validators.
+12. All four validators and the full node report the same block hash at the current height.

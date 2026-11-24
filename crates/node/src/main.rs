@@ -17,10 +17,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Generate a testnet: one home per validator under --home, plus faucet.json.
+    /// Generate a testnet under --home: validator homes (node-<i>), full-node homes (full-<i>),
+    /// faucet.json.
     Testnet {
+        /// Validators (local mode).
         #[arg(long, default_value_t = 4)]
         nodes: usize,
+        /// Full nodes (local mode): no validator key; follow the chain and serve RPC.
+        #[arg(long, default_value_t = 0)]
+        full_nodes: usize,
         #[arg(long)]
         home: PathBuf,
         /// P2P port (local: first port; docker: every container).
@@ -29,9 +34,12 @@ enum Cmd {
         /// RPC port (local: first port; docker: every container).
         #[arg(long, default_value_t = 18443)]
         rpc_port: u16,
-        /// Container host names (comma-separated) instead of 127.0.0.1.
+        /// Validator container host names (comma-separated) instead of 127.0.0.1.
         #[arg(long, value_delimiter = ',')]
         hosts: Option<Vec<String>>,
+        /// Full-node container host names (comma-separated), with --hosts.
+        #[arg(long, value_delimiter = ',')]
+        full_hosts: Option<Vec<String>>,
         #[arg(long, default_value = "wharfedale-local")]
         chain_id: String,
     },
@@ -49,12 +57,19 @@ async fn main() -> Result<()> {
         .init();
 
     match Cli::parse().cmd {
-        Cmd::Testnet { nodes, home, base_port, rpc_port, hosts, chain_id } => {
-            let addrs = match hosts {
-                Some(hosts) => testnet::docker(&hosts, base_port, rpc_port),
-                None => testnet::local(nodes, base_port, Some(rpc_port)),
+        Cmd::Testnet { nodes, full_nodes, home, base_port, rpc_port, hosts, full_hosts, chain_id } => {
+            let (validators, full) = match hosts {
+                Some(hosts) => (
+                    testnet::docker(&hosts, base_port, rpc_port),
+                    testnet::docker(&full_hosts.unwrap_or_default(), base_port, rpc_port),
+                ),
+                None => {
+                    let all = testnet::local(nodes + full_nodes, base_port, Some(rpc_port));
+                    (all[..nodes].to_vec(), all[nodes..].to_vec())
+                }
             };
-            for dir in testnet::generate(&home, &addrs, &chain_id, &mut rand::thread_rng())? {
+            let (v, f) = testnet::generate_network(&home, &validators, &full, &chain_id, &mut rand::thread_rng())?;
+            for dir in v.iter().chain(&f) {
                 println!("{}", dir.display());
             }
         }

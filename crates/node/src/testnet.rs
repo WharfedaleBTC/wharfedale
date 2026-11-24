@@ -1,11 +1,16 @@
-//! Testnet generation: N validator homes sharing one genesis, plus a funded faucet key.
+//! Testnet generation: validator and full-node homes sharing one genesis, plus a funded faucet
+//! key.
 //!
 //! Output under `root`:
 //! ```text
 //! root/faucet.json              faucet key ({"secret": hex}); genesis pays it FAUCET_OUTPUTS coins
 //! root/node-<i>/...             one home per validator (see `node::Home`)
 //! root/node-<i>/keys/fee.json   key of that validator's coinbase payout script
+//! root/full-<i>/...             one home per full node (role = "full", no validator key)
 //! ```
+//!
+//! Every node lists every other as a persistent peer (`persistent_peers_only`), so validators
+//! accept their full nodes.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,7 +20,7 @@ use malachitebft_app_channel::app::types::Keypair;
 use rand::{CryptoRng, RngCore};
 use wharfedale_chain::{fee_asset_for, genesis_funding_tx, key_path_script, Genesis, GenesisValidator};
 
-use crate::config::{NodeConfig, P2p, Rpc};
+use crate::config::{NodeConfig, P2p, Role, Rpc};
 use crate::keys;
 use crate::node::Home;
 
@@ -58,11 +63,24 @@ pub fn docker(hosts: &[String], port: u16, rpc_port: u16) -> Vec<NodeAddr> {
         .collect()
 }
 
-/// Writes one home per entry of `nodes` and the faucet key. Returns the homes.
+/// Writes one validator home per entry of `nodes` and the faucet key. Returns the homes.
 pub fn generate<R: RngCore + CryptoRng>(root: &Path, nodes: &[NodeAddr], chain_id: &str, rng: &mut R) -> Result<Vec<PathBuf>> {
-    let n = nodes.len();
+    let (validators, _) = generate_network(root, nodes, &[], chain_id, rng)?;
+    Ok(validators)
+}
+
+/// Validator homes (`node-<i>`) and full-node homes (`full-<i>`), fully meshed. Returns both.
+pub fn generate_network<R: RngCore + CryptoRng>(
+    root: &Path,
+    validators: &[NodeAddr],
+    full_nodes: &[NodeAddr],
+    chain_id: &str,
+    rng: &mut R,
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+    let n = validators.len();
+    let all: Vec<&NodeAddr> = validators.iter().chain(full_nodes).collect();
     let validator_secrets: Vec<[u8; 32]> = (0..n).map(|_| keys::generate(rng)).collect();
-    let node_secrets: Vec<[u8; 32]> = (0..n).map(|_| keys::generate(rng)).collect();
+    let node_secrets: Vec<[u8; 32]> = (0..all.len()).map(|_| keys::generate(rng)).collect();
     let fee_secrets: Vec<[u8; 32]> = (0..n).map(|_| keys::generate(rng)).collect();
     let faucet_secret = keys::generate(rng);
 
@@ -83,31 +101,42 @@ pub fn generate<R: RngCore + CryptoRng>(root: &Path, nodes: &[NodeAddr], chain_i
         .iter()
         .map(|s| Ok(Keypair::ed25519_from_bytes(*s)?.public().to_peer_id()))
         .collect::<Result<Vec<_>>>()?;
+    let peers_of = |i: usize| -> Vec<String> {
+        (0..all.len()).filter(|j| *j != i).map(|j| format!("{}/p2p/{}", all[j].dial, peer_ids[j])).collect()
+    };
 
     std::fs::create_dir_all(root)?;
     keys::save(root.join("faucet.json"), &faucet_secret)?;
 
-    let mut homes = Vec::with_capacity(n);
-    for (i, node) in nodes.iter().enumerate() {
-        let home = Home(root.join(format!("node-{i}")));
+    let mut homes = (Vec::with_capacity(n), Vec::with_capacity(full_nodes.len()));
+    for (i, node) in all.iter().enumerate() {
+        let full = i >= n;
+        let name = if full { format!("full-{}", i - n) } else { format!("node-{i}") };
+        let home = Home(root.join(&name));
         std::fs::create_dir_all(home.0.join("keys"))?;
         genesis.save(home.genesis())?;
-        keys::save(home.validator_key(), &validator_secrets[i])?;
         keys::save(home.node_key(), &node_secrets[i])?;
-        keys::save(home.0.join("keys").join("fee.json"), &fee_secrets[i])?;
+        let fee_payout_script = if full {
+            String::new()
+        } else {
+            keys::save(home.validator_key(), &validator_secrets[i])?;
+            keys::save(home.0.join("keys").join("fee.json"), &fee_secrets[i])?;
+            hex::encode(key_path_script(&fee_secrets[i]).as_bytes())
+        };
         NodeConfig {
-            moniker: format!("node-{i}"),
+            moniker: name,
+            role: if full { Role::Full } else { Role::Validator },
             block_time_ms: 1_000,
-            fee_payout_script: hex::encode(key_path_script(&fee_secrets[i]).as_bytes()),
-            p2p: P2p {
-                listen_addr: node.listen.clone(),
-                persistent_peers: (0..n).filter(|j| *j != i).map(|j| format!("{}/p2p/{}", nodes[j].dial, peer_ids[j])).collect(),
-                persistent_peers_only: true,
-            },
+            fee_payout_script,
+            p2p: P2p { listen_addr: node.listen.clone(), persistent_peers: peers_of(i), persistent_peers_only: true },
             rpc: node.rpc.clone().map(|listen_addr| Rpc { listen_addr }),
         }
         .save(home.config())?;
-        homes.push(home.0);
+        if full {
+            homes.1.push(home.0);
+        } else {
+            homes.0.push(home.0);
+        }
     }
     Ok(homes)
 }

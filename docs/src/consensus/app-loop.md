@@ -56,8 +56,10 @@ against the block hash.
 | Before the commit of height H | Start at H; Malachite replays its WAL for H; stored proposals give identical answers |
 | After the commit of H, before the `Finalized` reply | Start at H + 1 |
 
-`NodeHandle::shutdown` stops the engine and waits for the app task, releasing the WAL and
-database locks; a restarted node catches up through value sync.
+`NodeHandle::shutdown` stops the RPC server gracefully (open keep-alive connections hold the
+node state), the engine, the app task, and the indexer (by flag: its blocking work can't be
+aborted), waiting for each, so the WAL and database locks are released; a restarted node catches
+up through value sync.
 
 ## Tests
 

@@ -11,11 +11,17 @@ use serde_json::{json, Value};
 use crate::methods::{self, RpcError};
 use crate::NodeState;
 
-pub async fn serve(addr: SocketAddr, state: NodeState) -> std::io::Result<()> {
+/// Serves JSON-RPC and Esplora until `shutdown` resolves, then closes idle connections, lets
+/// in-flight requests finish and returns: every handle on the node state is dropped by then.
+pub async fn serve(
+    addr: SocketAddr,
+    state: NodeState,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
     let app = Router::new().route("/", post(handle)).merge(crate::esplora::router()).with_state(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "RPC listening");
-    axum::serve(listener, app).await
+    axum::serve(listener, app).with_graceful_shutdown(shutdown).await
 }
 
 async fn handle(State(state): State<NodeState>, body: axum::body::Bytes) -> Json<Value> {

@@ -47,6 +47,7 @@ mdbook serve docs
 | Simplicity FFI: SimplicityHL p2pk executed by the C library; corrupted signature, wrong CMR, budget, garbage program | `crates/ledger-simplicity-sys/tests/exec.rs` |
 | Simplicity spends through `check_tx`: p2pk, annex, mixed key-path inputs, lock-time covenant, commitment and shape errors | `crates/ledger/tests/simplicity.rs` |
 | Multi-node: 4 validators, stop/restart, catch-up, chain agreement | `crates/node/tests/network.rs` |
+| Full node: follows, relays a transaction, catches up after restart, refuses validator role without a key | `crates/node/tests/full_node.rs` |
 | Header, block, genesis, merkle, MTP | `crates/chain/tests/chain.rs` |
 | Mempool policy, ordering, eviction, wire format | `crates/mempool/tests/mempool.rs` |
 | End to end in process: confidential faucet → alice → bob, issuance, reissuance, Esplora, fee payouts, p2pk contract | `crates/node/tests/transfer.rs` |

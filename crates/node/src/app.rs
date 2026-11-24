@@ -45,14 +45,20 @@ pub const COINBASE_WEIGHT_RESERVE: usize = 4_000;
 /// Complete proposals for the next height held until it starts.
 pub const MAX_FUTURE_PROPOSALS: usize = 16;
 
+/// What a validator needs to propose: its consensus key and where its coinbase pays fees.
+pub struct Proposer {
+    pub signer: Ed25519Signer,
+    pub fee_script: Script,
+}
+
 pub struct App {
     pub ctx: WharfedaleContext,
     /// Store, mempool and verification cache shared with RPC and gossip.
     pub node: NodeState,
     pub address: Address,
     validator_set: ValidatorSet,
-    signer: Ed25519Signer,
-    fee_script: Script,
+    /// `None` on a full node: it never proposes.
+    proposer: Option<Proposer>,
     block_time: Duration,
     streams: PartStreamsMap,
     height: Height,
@@ -70,8 +76,7 @@ impl App {
         node: NodeState,
         validator_set: ValidatorSet,
         address: Address,
-        signer: Ed25519Signer,
-        fee_script: Script,
+        proposer: Option<Proposer>,
         block_time: Duration,
         tip: tokio::sync::watch::Sender<u64>,
     ) -> Result<Self> {
@@ -81,8 +86,7 @@ impl App {
             node,
             address,
             validator_set,
-            signer,
-            fee_script,
+            proposer,
             block_time,
             streams: PartStreamsMap::new(),
             height: Height::new(1),
@@ -113,12 +117,12 @@ impl App {
 
     /// Mempool template + coinbase claiming its fees, validated. Transactions that no longer
     /// validate are dropped from the template and the mempool.
-    fn assemble(&self, h: u64, ctx: &ChainCtx) -> Result<(Vec<Transaction>, BlockDiff)> {
+    fn assemble(&self, h: u64, ctx: &ChainCtx, fee_script: &Script) -> Result<(Vec<Transaction>, BlockDiff)> {
         let max = MAX_BLOCK_WEIGHT - COINBASE_WEIGHT_RESERVE;
         let mut candidates: Vec<Transaction> =
             self.node.pool().template(max).iter().map(|t| (**t).clone()).collect();
         let fees = loop {
-            let mut txs = vec![coinbase(h, 0, self.node.fee_asset, &self.fee_script)];
+            let mut txs = vec![coinbase(h, 0, self.node.fee_asset, fee_script)];
             txs.extend(candidates.iter().cloned());
             match connect_block(&*self.node.store, &txs, ctx, &self.node.cache) {
                 Ok(diff) => break diff.fees,
@@ -132,7 +136,7 @@ impl App {
         };
         // Fees in other assets (only a non-standard proposer includes them) stay unclaimed.
         let claim = fees.get(&self.node.fee_asset).copied().unwrap_or(0);
-        let mut txs = vec![coinbase(h, claim, self.node.fee_asset, &self.fee_script)];
+        let mut txs = vec![coinbase(h, claim, self.node.fee_asset, fee_script)];
         txs.extend(candidates);
         let diff = connect_block(&*self.node.store, &txs, ctx, &self.node.cache)?;
         Ok((txs, diff))
@@ -149,6 +153,7 @@ impl App {
     fn propose(&mut self, height: Height, round: Round) -> Result<(Block, ProposalParts)> {
         let h = height.as_u64();
         let r = round.as_u32().ok_or_else(|| eyre!("propose in nil round"))?;
+        let proposer = self.proposer.as_ref().ok_or_else(|| eyre!("a full node does not propose"))?;
         if let Some(hash) = self.store().built(h, r)? {
             if let (Some(record), Some(parts)) = (self.store().undecided_by_hash(h, &hash)?, self.store().parts(h, &hash)?) {
                 let (_, block) = records::decode_proposal(&record)?;
@@ -158,7 +163,7 @@ impl App {
 
         let parent = self.store().header(h - 1)?.ok_or_else(|| eyre!("missing parent header {}", h - 1))?;
         let ctx = self.chain_ctx(h)?;
-        let (txs, diff) = self.assemble(h, &ctx)?;
+        let (txs, diff) = self.assemble(h, &ctx, &proposer.fee_script)?;
         let header = Header {
             version: Header::VERSION,
             height: h,
@@ -170,7 +175,7 @@ impl App {
         };
         let block = Block { header, txs };
         let hash = block.hash();
-        let parts = self.sign_parts(&block, height, round);
+        let parts = self.sign_parts(&proposer.signer, &block, height, round);
 
         let pv = ProposedValue {
             height,
@@ -188,10 +193,10 @@ impl App {
         Ok((block, parts))
     }
 
-    fn sign_parts(&self, block: &Block, height: Height, round: Round) -> ProposalParts {
+    fn sign_parts(&self, signer: &Ed25519Signer, block: &Block, height: Height, round: Round) -> ProposalParts {
         let bytes = block.encode();
         let chunks: Vec<Bytes> = bytes.chunks(CHUNK_SIZE).map(Bytes::copy_from_slice).collect();
-        let signature = self.signer.sign(&parts_digest(height, round, Round::Nil, &chunks));
+        let signature = signer.sign(&parts_digest(height, round, Round::Nil, &chunks));
         let mut parts = vec![ProposalPart::Init(ProposalInit::new(height, round, Round::Nil, self.address))];
         parts.extend(chunks.into_iter().map(|c| ProposalPart::Data(ProposalData::new(c))));
         parts.push(ProposalPart::Fin(ProposalFin::new(signature)));
