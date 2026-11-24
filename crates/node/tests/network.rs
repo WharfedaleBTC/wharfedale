@@ -1,5 +1,6 @@
 //! M2: four in-process validators decide blocks; a stopped validator restarts and catches up;
-//! every node ends with the same chain.
+//! every node ends with the same chain. Liveness without transactions: these nodes build empty
+//! blocks (`create_empty_blocks`); the default, no empty blocks, is covered in `transfer.rs`.
 
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -31,6 +32,7 @@ fn setup(n: usize) -> (tempfile::TempDir, Vec<PathBuf>) {
         let path = Home(home.clone()).config();
         let mut config = NodeConfig::load(&path).unwrap();
         config.block_time_ms = BLOCK_TIME_MS;
+        config.create_empty_blocks = true;
         config.save(&path).unwrap();
     }
     (dir, homes)

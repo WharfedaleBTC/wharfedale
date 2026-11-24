@@ -10,7 +10,7 @@ use crate::merkle;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Block {
     pub header: Header,
-    /// `txs[0]` is the coinbase (except in genesis).
+    /// A coinbase, when the block has one, is `txs[0]`. It exists only to pay the block's fees.
     pub txs: Vec<Transaction>,
 }
 

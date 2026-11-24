@@ -1,6 +1,5 @@
 //! RPC methods. Names and shapes follow Elements where they exist; amounts are base units
-//! (`value_sat`). Wharfedale additions: `getscriptutxos`.
-
+//! (`value_sat`). Wharfedale additions: `getscriptutxos`; `getnetworkinfo` has its own shape.
 
 use elements::{confidential, encode, BlockHash, OutPoint, Script, Transaction, TxOut, Txid};
 use serde_json::{json, Value};
@@ -29,6 +28,7 @@ const DESERIALIZATION: i64 = -22;
 const VERIFY_ERROR: i64 = -25;
 const VERIFY_REJECTED: i64 = -26;
 const ALREADY_IN_MEMPOOL: i64 = -27;
+const P2P_DISABLED: i64 = -9;
 
 type Result<T> = std::result::Result<T, RpcError>;
 
@@ -167,6 +167,35 @@ fn getblockchaininfo(st: &NodeState) -> Result<Value> {
         "genesis_hash": st.genesis_hash.to_string(),
         "fee_asset": st.fee_asset.to_string(),
         "mempool_size": pool.len(),
+        "role": st.role.as_str(),
+    }))
+}
+
+/// Async (asks the p2p layer); called by the server outside `call`.
+pub async fn getnetworkinfo(st: &NodeState) -> Result<Value> {
+    let ask = st.network_info.as_ref().ok_or_else(|| RpcError::new(P2P_DISABLED, "network info unavailable"))?;
+    let mut info = tokio::time::timeout(std::time::Duration::from_secs(5), ask())
+        .await
+        .map_err(|_| RpcError::new(INTERNAL, "network state request timed out"))?
+        .map_err(|e| RpcError::new(INTERNAL, e))?;
+    info.peers.sort_by(|a, b| (&a.moniker, &a.peer_id).cmp(&(&b.moniker, &b.peer_id)));
+    let (height, _) = st.store.tip().map_err(internal)?;
+    Ok(json!({
+        "peer_id": info.peer_id,
+        "moniker": info.moniker,
+        "role": st.role.as_str(),
+        "consensus_address": info.consensus_address,
+        "listen_addrs": info.listen_addrs,
+        "height": height,
+        "peers": info.peers.iter().map(|p| json!({
+            "peer_id": p.peer_id,
+            "moniker": p.moniker,
+            "address": p.address,
+            "role": if p.validator { "validator" } else { "full" },
+            "consensus_address": p.consensus_address,
+            "direction": p.direction,
+            "score": p.score,
+        })).collect::<Vec<_>>(),
     }))
 }
 

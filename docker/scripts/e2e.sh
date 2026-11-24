@@ -7,8 +7,13 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok - $*"; }
 retry() { for _ in $(seq 1 120); do "$@" >/dev/null 2>&1 && return 0; sleep 0.5; done; return 1; }
 
-w node0 wait-height --height 2 --timeout 180 >/dev/null
-pass "chain is producing blocks"
+w node0 wait-height --height 0 --timeout 180 >/dev/null
+pass "node0 answers"
+
+H0=$(w node0 rpc getblockcount)
+sleep 3
+[ "$(w node0 rpc getblockcount)" = "$H0" ] || fail "the chain grew with nothing to include"
+pass "no empty blocks: an idle chain stays at height $H0"
 
 FEE_ASSET=$(w node0 rpc getblockchaininfo | sed -n 's/.*"fee_asset": "\([0-9a-f]*\)".*/\1/p')
 [ -n "$FEE_ASSET" ] || fail "no fee_asset in getblockchaininfo"
@@ -94,7 +99,11 @@ w node0 wait-tx --txid "$TLOCK" --timeout 60 >/dev/null || fail "timelock fundin
 if w node0 contract-spend "${TL[@]}" --witness "$D/bob.wit" --to "$BOB" --amount 10000 --lock-time $((AFTER - 1)) >/dev/null 2>&1; then
   fail "timelock spent before its height"
 fi
-w node0 wait-height --height "$AFTER" --timeout 60 >/dev/null
+# Blocks only come with transactions: small payments carry the chain to $AFTER.
+while [ "$(w node0 rpc getblockcount)" -lt "$AFTER" ]; do
+  FILL=$(w node0 send --key /net/faucet.json --to "$ALICE" --amount 1000)
+  w node0 wait-tx --txid "$FILL" --timeout 60 >/dev/null || fail "filler payment not confirmed"
+done
 TS=$(w node0 contract-spend "${TL[@]}" --witness "$D/bob.wit" --to "$BOB" --amount 10000 --lock-time "$AFTER")
 w node1 wait-tx --txid "$TS" --timeout 60 >/dev/null || fail "timelock spend not confirmed"
 pass "timelock contract: refused with lock time $((AFTER - 1)), spent with $AFTER"

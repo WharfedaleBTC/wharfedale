@@ -33,6 +33,11 @@ pub struct NodeConfig {
     /// validators, unused on full nodes.
     #[serde(default)]
     pub fee_payout_script: String,
+    /// Build blocks with no transactions. Off (the default): after a height is finalized the
+    /// node waits for a transaction (or a peer's proposal for the next height) before starting
+    /// the next one, so the chain only grows when there is something to include.
+    #[serde(default)]
+    pub create_empty_blocks: bool,
     pub p2p: P2p,
     /// JSON-RPC server; absent = disabled.
     #[serde(default)]

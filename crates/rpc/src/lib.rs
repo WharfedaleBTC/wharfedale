@@ -7,6 +7,8 @@ mod esplora;
 mod methods;
 mod server;
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
@@ -17,6 +19,56 @@ use wharfedale_mempool::{AdmitError, Mempool, Source};
 use wharfedale_store::Store;
 
 pub use server::serve;
+
+/// What the node does in consensus (`config.toml` `role`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeRole {
+    Validator,
+    Full,
+}
+
+impl NodeRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NodeRole::Validator => "validator",
+            NodeRole::Full => "full",
+        }
+    }
+}
+
+/// The p2p layer as seen by `getnetworkinfo`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NetworkInfo {
+    /// libp2p peer id of this node.
+    pub peer_id: String,
+    pub moniker: String,
+    /// Lowercase hex; `None` on full nodes.
+    pub consensus_address: Option<String>,
+    /// Multiaddrs.
+    pub listen_addrs: Vec<String>,
+    pub peers: Vec<PeerInfo>,
+}
+
+/// A connected peer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PeerInfo {
+    pub peer_id: String,
+    pub moniker: String,
+    /// Multiaddr.
+    pub address: String,
+    /// Proved a key in the validator set.
+    pub validator: bool,
+    /// Lowercase hex, when the peer is a validator.
+    pub consensus_address: Option<String>,
+    /// `"inbound"` or `"outbound"`.
+    pub direction: Option<String>,
+    /// GossipSub score.
+    pub score: f64,
+}
+
+/// Asks the p2p layer for its state (set by the node; the rpc crate does not know Malachite).
+pub type NetworkInfoFn =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<NetworkInfo, String>> + Send>> + Send + Sync>;
 
 /// Handles shared by the consensus loop, the gossip receiver and the RPC server.
 #[derive(Clone)]
@@ -30,6 +82,9 @@ pub struct NodeState {
     pub coinbase_maturity: u64,
     /// Locally submitted transactions to publish on the Mempool channel.
     pub relay: mpsc::Sender<Transaction>,
+    pub role: NodeRole,
+    /// `None`: no p2p layer (`getnetworkinfo` fails).
+    pub network_info: Option<NetworkInfoFn>,
 }
 
 impl NodeState {

@@ -53,9 +53,11 @@ an outpoint the block spent; then `expire(now)`.
 ## Block template (`App::assemble`)
 
 1. `template(MAX_BLOCK_WEIGHT − 4000)`: highest fee rate first, skipping what doesn't fit.
-2. `connect_block([placeholder coinbase] + template)`. A failing transaction
-   (`BlockError::Tx { index }`) is dropped from the template and the pool; retry.
-3. Rebuild the coinbase claiming the fee-asset fees (one output); `connect_block` again (cache hits).
+2. Empty template: no block (unless `create_empty_blocks`).
+3. `connect_block(template)`. A failing transaction (`BlockError::Tx { index }`) is dropped
+   from the template and the pool; back to 2.
+4. If the fee-asset fees are > 0, put a coinbase claiming them (one output) in front;
+   `connect_block` again (cache hits).
 
 ## Gossip
 

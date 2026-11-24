@@ -28,6 +28,16 @@ channels.mempool.recv()          ← mpsc (1024, try_send) ← Msg::NewEvent  �
 
 Size: ~200 lines of code, ~20 of test fixtures.
 
+## Holding a height (same branch)
+
+Two more `WHARFEDALE:` changes let the application hold a height while the network is idle
+(no empty blocks; see [Holding a height](app-loop.md#holding-a-height)):
+
+| Crate | File | Change |
+|---|---|---|
+| `app-channel` | `src/connector.rs` | `ConsensusReady`: wait for the application's reply in a spawned task, as upstream already does for `Finalized`, so a held first height doesn't block other host messages (sync requests from peers) |
+| `app-channel` | `src/msgs.rs` | `NetworkMsg::UpdateValidatorSet(ValidatorSet)` → `network::Msg::UpdateValidatorSet`: the network layer types peers by the validator set and otherwise learns it only when a height starts |
+
 ## Properties
 
 - Inbound application bytes never reach the consensus or sync actors; `NetworkEvent` is unchanged.

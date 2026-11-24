@@ -1,65 +1,92 @@
-# Wharfedale local network: 4 validators, 1 full node (rpc0), example and end-to-end runners.
+# Wharfedale local network: 4 validators, a full node (rpc0) and the web app.
+# Use the Makefile in the repository root: make run | stop | clear | logs | example | e2e | test.
 #
-#   docker compose -f docker/compose.yml up -d --build                 # network
-#   docker compose -f docker/compose.yml --profile example run --rm example
-#   docker compose -f docker/compose.yml --profile test run --rm e2e   # exit code = result
-#   docker compose -f docker/compose.yml down -v                       # stop, wipe chain
-#
-# RPC: node0..node3 on host ports 18443..18446; rpc0 (full node, no validator key) on 18447.
+# RPC: node0..node3 on host ports 18443..18446, rpc0 (full node) on 18447. Web app: :8080.
+# Images are built from source: the build context is the folder holding wharfedale/,
+# malachite/ (the fork), wharfedale-sdk-rs/ and, for the web app, wharfedale-web/ and
+# wharfedale-sdk-ts/.
 
 name: wharfedale
 
-x-image: &image
-  image: wharfedale:dev
-  volumes:
-    - net:/net
-
-x-node: &node
-  <<: *image
-  restart: unless-stopped
-  depends_on:
-    init:
-      condition: service_completed_successfully
-
-x-runner: &runner
-  <<: *image
-  depends_on:
-    node0: { condition: service_started }
-    node1: { condition: service_started }
-    node2: { condition: service_started }
-    node3: { condition: service_started }
-    rpc0: { condition: service_started }
-
 services:
-  # Builds the image and generates genesis, keys and configs once (kept in the `net` volume).
+  # Genesis, keys and configs for every node, generated once into the `net` volume.
   init:
-    <<: *image
+    image: wharfedale:dev
     build:
       context: ../..
       dockerfile: wharfedale/docker/Dockerfile
+    volumes:
+      - net:/net
     command:
       - sh
       - -c
       - "[ -f /net/faucet.json ] || wharfedale testnet --home /net --hosts node0,node1,node2,node3 --full-hosts rpc0 --chain-id wharfedale-docker"
 
-  node0: { <<: *node, command: [wharfedale, start, --home, /net/node-0], ports: ["18443:18443"] }
-  node1: { <<: *node, command: [wharfedale, start, --home, /net/node-1], ports: ["18444:18443"] }
-  node2: { <<: *node, command: [wharfedale, start, --home, /net/node-2], ports: ["18445:18443"] }
-  node3: { <<: *node, command: [wharfedale, start, --home, /net/node-3], ports: ["18446:18443"] }
+  node0:
+    image: wharfedale:dev
+    command: [wharfedale, start, --home, /net/node-0]
+    volumes:
+      - net:/net
+    ports: ["18443:18443"]
+    restart: unless-stopped
+    depends_on:
+      init: { condition: service_completed_successfully }
+
+  node1:
+    image: wharfedale:dev
+    command: [wharfedale, start, --home, /net/node-1]
+    volumes:
+      - net:/net
+    ports: ["18444:18443"]
+    restart: unless-stopped
+    depends_on:
+      init: { condition: service_completed_successfully }
+
+  node2:
+    image: wharfedale:dev
+    command: [wharfedale, start, --home, /net/node-2]
+    volumes:
+      - net:/net
+    ports: ["18445:18443"]
+    restart: unless-stopped
+    depends_on:
+      init: { condition: service_completed_successfully }
+
+  node3:
+    image: wharfedale:dev
+    command: [wharfedale, start, --home, /net/node-3]
+    volumes:
+      - net:/net
+    ports: ["18446:18443"]
+    restart: unless-stopped
+    depends_on:
+      init: { condition: service_completed_successfully }
+
   # Full node: follows the chain, serves RPC, relays transactions; never votes.
-  rpc0:  { <<: *node, command: [wharfedale, start, --home, /net/full-0], ports: ["18447:18443"] }
+  rpc0:
+    image: wharfedale:dev
+    command: [wharfedale, start, --home, /net/full-0]
+    volumes:
+      - net:/net
+    ports: ["18447:18443"]
+    restart: unless-stopped
+    depends_on:
+      init: { condition: service_completed_successfully }
 
-  # Walkthrough: faucet → alice → bob, printing every step.
-  example:
-    <<: *runner
-    profiles: [example]
-    command: [example.sh]
-
-  # End-to-end assertions; exits non-zero on failure.
-  e2e:
-    <<: *runner
-    profiles: [test]
-    command: [e2e.sh]
+  # Web app: explorer, network, wallet, faucet, assets, docs. Reads and submits through rpc0,
+  # polls every node for the network page, pays the faucet from /net/faucet.json.
+  web:
+    image: wharfedale-web:dev
+    build:
+      context: ../..
+      dockerfile: wharfedale-web/Dockerfile
+    volumes:
+      - net:/net:ro
+      - ./web-config.json:/config/config.json:ro
+    ports: ["8080:8080"]
+    restart: unless-stopped
+    depends_on:
+      rpc0: { condition: service_started }
 
 volumes:
   net: {}

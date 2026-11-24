@@ -1,7 +1,8 @@
 # Wharfedale node + wallet image.
 # Build context: the directory holding `wharfedale/`, `wharfedale-sdk-rs/` and `malachite/` (the fork), e.g.
 #   docker build -f wharfedale/docker/Dockerfile -t wharfedale:dev .
-# (docker/compose.yml does this for you.)
+# (`make run` does this for you; CI publishes it as ghcr.io/wharfedalebtc/wharfedale.)
+# `--target binaries` exports just the two binaries (CI attaches them to releases).
 
 FROM rust:1-bookworm AS build
 WORKDIR /src
@@ -13,6 +14,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/wharfedale/target \
     cargo build --release --locked -p wharfedale-node -p wharfedale-wallet-cli \
  && cp target/release/wharfedale target/release/wharfedale-wallet /usr/local/bin/
+
+FROM scratch AS binaries
+COPY --from=build /usr/local/bin/wharfedale /usr/local/bin/wharfedale-wallet /
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates bash \

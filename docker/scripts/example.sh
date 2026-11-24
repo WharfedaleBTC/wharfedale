@@ -5,8 +5,8 @@ set -euo pipefail
 
 w() { wharfedale-wallet --rpc "http://$1:18443" "${@:2}"; }
 
-echo "== waiting for the chain"
-w node0 wait-height --height 2 --timeout 180 >/dev/null
+echo "== waiting for node0 (blocks come only with transactions)"
+w node0 wait-height --height 0 --timeout 180 >/dev/null
 w node0 rpc getblockchaininfo
 
 mkdir -p /tmp/wallets

@@ -42,6 +42,25 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
     tokio::task::spawn_blocking(f).await.unwrap()
 }
 
+/// Polls `getnetworkinfo` on `url` every 250 ms, for up to 60 s, until `done` holds.
+async fn network_info(url: String, done: impl Fn(&Value) -> bool + Send + Clone + 'static) -> Value {
+    let mut last = Value::Null;
+    for _ in 0..240 {
+        let u = url.clone();
+        // The RPC server may still be starting: a refused connection is retried.
+        last = blocking(move || Client::new(u).call("getnetworkinfo", json!([])).unwrap_or(Value::Null)).await;
+        if done(&last) {
+            return last;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    panic!("getnetworkinfo never satisfied the check: {last}");
+}
+
+fn peers_with_role<'a>(info: &'a Value, role: &str) -> Vec<&'a Value> {
+    info["peers"].as_array().unwrap().iter().filter(|p| p["role"] == json!(role)).collect()
+}
+
 async fn block_hash(url: String, h: u64) -> Value {
     blocking(move || Client::new(url).call("getblockhash", json!([h])).unwrap()).await
 }
@@ -70,7 +89,29 @@ async fn full_node_follows_relays_and_catches_up() {
         vnodes.push(node::start(h).await.unwrap());
     }
     let mut fnode = node::start(&fhomes[0]).await.unwrap();
-    wait_for(&mut fnode.tip, 3, 60).await;
+
+    // getnetworkinfo: the full node sees the 4 validators; a validator sees the full node.
+    // The validators' roles as seen *from the full node* are not asserted: Malachite drops a
+    // validator proof that arrives before consensus subscribes to network events, so a peer can
+    // stay typed "full" until it reconnects (a fork issue, not this RPC).
+    let info = network_info(url(&full[0]), |v| v["peers"].as_array().is_some_and(|p| p.len() == 4)).await;
+    assert_eq!(info["role"], json!("full"));
+    assert!(info["consensus_address"].is_null() && info["peer_id"].is_string() && info["height"].is_u64(), "{info}");
+    assert!(info["listen_addrs"][0].as_str().is_some_and(|a| a.starts_with("/ip4/127.0.0.1/tcp/")), "{info}");
+    let peers = info["peers"].as_array().unwrap();
+    assert_eq!(peers.len(), 4, "{info}");
+    assert!(peers.windows(2).all(|w| w[0]["moniker"].as_str() <= w[1]["moniker"].as_str()), "sorted: {info}");
+    assert!(peers.iter().all(|p| p["moniker"].as_str().is_some_and(|m| m.starts_with("node-"))), "{info}");
+    let full_moniker = NodeConfig::load(fhome.config()).unwrap().moniker;
+    let vinfo = network_info(url(&validators[0]), |v| peers_with_role(v, "full").len() == 1).await;
+    assert_eq!(vinfo["role"], json!("validator"));
+    assert!(vinfo["consensus_address"].is_string(), "{vinfo}");
+    assert_eq!(peers_with_role(&vinfo, "full")[0]["moniker"], json!(full_moniker));
+    assert!(peers_with_role(&vinfo, "full")[0]["consensus_address"].is_null(), "{vinfo}");
+    assert!(peers.iter().any(|p| p["peer_id"] == json!(vinfo["peer_id"])), "the full node lists validator 0");
+    let chain = blocking({ let u = url(&full[0]); move || Client::new(u).call("getblockchaininfo", json!([])).unwrap() }).await;
+    assert_eq!(chain["role"], json!("full"));
+    eprintln!("getnetworkinfo (full node): {info:#}");
 
     // A transaction submitted to the full node is gossiped to the validators and confirmed.
     let faucet = Key::load(&dir.path().join("faucet.json")).unwrap();
@@ -87,10 +128,18 @@ async fn full_node_follows_relays_and_catches_up() {
     // Same chain as the validators.
     assert_eq!(block_hash(url(&full[0]), height).await, block_hash(url(&validators[0]), height).await);
 
-    // Stopped, the full node misses blocks; restarted, it catches up by value sync.
+    // Stopped, the full node misses blocks; restarted, it catches up by value sync even though
+    // the network is idle again by then (a full node never holds a height).
     fnode.shutdown().await;
-    let behind = *vnodes[0].tip.borrow() + 4;
-    wait_for(&mut vnodes[0].tip, behind, 60).await;
+    let faucet = Key::load(&dir.path().join("faucet.json")).unwrap();
+    for _ in 0..3 {
+        let (vurl, f, to) = (url(&validators[0]), faucet.clone(), alice.address().to_string());
+        let txid = blocking(move || Wallet::new(Client::new(vurl.clone()), f).send(&to, 10_000, &SendOptions::default()).unwrap()).await;
+        let vurl = url(&validators[0]);
+        blocking(move || Client::new(vurl).wait_for_tx(&txid, Duration::from_secs(60)).unwrap()).await;
+    }
+    let behind = *vnodes[0].tip.borrow();
+    assert!(behind >= height + 3, "{behind} after {height}");
     let mut fnode = node::start(&fhomes[0]).await.unwrap();
     wait_for(&mut fnode.tip, behind, 60).await;
     assert_eq!(block_hash(url(&full[0]), behind).await, block_hash(url(&validators[1]), behind).await);

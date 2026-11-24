@@ -48,10 +48,21 @@ Written by the indexer (`Store::index_next`, one block per write transaction):
 | `tx_index` | txid → (height, position) | `getrawtransaction`, `/tx/:txid` |
 | `spk_history` | scripthash ‖ height (BE) ‖ position (BE) ‖ txid → () | `/scripthash/:hash/txs`, `/address/:a/txs` |
 | `spent_by` | outpoint → txid ‖ vin (LE) | `/tx/:txid/outspends` |
-| `assets` | asset id → JSON `AssetRecord` (issuance txin/prevout, contract hash, entropy, token, counts, explicit issued amount) | `/asset/:id`, wallet reissuance |
+| `assets` | asset id → JSON `AssetRecord` (below) | `/asset/:id`, wallet reissuance |
 | `meta.indexed_height` | last indexed height | indexer cursor |
 
 A script appears in `spk_history` for every transaction that pays it or spends from it.
+
+`AssetRecord` (JSON):
+
+| Field | Meaning |
+|---|---|
+| `asset_id`, `reissuance_token` | ids (hex) |
+| `issuance_txid`, `issuance_vin`, `issuance_prevout` | first issuance input and the outpoint it spent |
+| `contract_hash`, `entropy` | hex; `entropy` is needed to reissue |
+| `height` | block of the first issuance |
+| `issuance_count`, `issued_amount`, `has_blinded_issuances`, `reissuance_tokens` | totals over (re)issuances; amounts explicit only |
+| `name`, `ticker`, `precision` | optional, from a [WFA1](rpc.md#asset-names-wfa1) output of the issuance transaction; never changed by reissuances. Missing in older records (decode as `null`) |
 
 `scripthash` = SHA-256(scriptPubKey), the Electrum/Esplora convention.
 

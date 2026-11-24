@@ -46,11 +46,12 @@ otherwise → reject (Tapscript and unknown shapes)
 
 ## `connect_block`
 
-1. `txs[0]` is a coinbase: one null-prevout input, `script_sig = push(height)`, explicit
-   outputs, no output witnesses, spendable outputs > 0.
-2. For each `txs[1..]`: `check_tx` against the view plus earlier outputs in the block; record
-   spent and created entries; add to the fee map.
+1. If `txs[0]` is a coinbase: one null-prevout input, `script_sig = push(height)`, explicit
+   outputs, no output witnesses, spendable outputs > 0. A coinbase anywhere else is rejected.
+2. For each other transaction: `check_tx` against the view plus earlier outputs in the block;
+   record spent and created entries; add to the fee map.
 3. Coinbase: for each asset, Σ outputs ≤ `fees[asset]` (`VerifyCoinbaseAmount`, subsidy 0).
+   Without a coinbase the fees are burned.
 4. Block weight ≤ `MAX_BLOCK_WEIGHT`. This also bounds Simplicity work: each input's budget is
    its own witness size.
 5. Return `BlockDiff`. Fee and `OP_RETURN` outputs are not created in the UTXO set.
@@ -68,6 +69,11 @@ otherwise → reject (Tapscript and unknown shapes)
 | Explicit issuance amount | ≤ `MAX_MONEY` for the pegged asset, ≤ `i64::MAX` otherwise | ≤ `MAX_MONEY` for every asset |
 | Transaction weight | Stripped size × 4 ≤ `MAX_BLOCK_WEIGHT` | Full weight ≤ `MAX_TX_WEIGHT` (400 000) |
 | Empty-script output with a confidential value | Unspendable output | Rejected (an empty script is a fee output, which must be explicit) |
+
+One deviation is looser: the coinbase is optional (Elements requires one in every block). It
+only pays fees, so a block whose transactions pay none needs none, and an empty block (no
+transactions) is structurally valid; proposers don't build those (see
+[No empty blocks](../consensus/blocks.md#no-empty-blocks)).
 
 ## Porting rules
 

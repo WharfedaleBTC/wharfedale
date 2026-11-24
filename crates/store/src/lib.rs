@@ -6,7 +6,9 @@
 mod codec;
 mod index;
 
-pub use index::{script_hash, AssetRecord};
+pub use index::{
+    asset_metadata, parse_asset_metadata, script_hash, wfa1_payload, AssetMetadata, AssetRecord, WFA1_MAX_METADATA, WFA1_TAG,
+};
 
 use std::path::Path;
 

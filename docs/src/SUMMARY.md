@@ -21,7 +21,9 @@
 - [RPC](rpc.md)
 - [Wallet](wallet.md)
 - [SDKs](sdk.md)
+- [Web app](web.md)
 - [Docker](docker.md)
+- [CI and images](ci.md)
 
 # Reference
 

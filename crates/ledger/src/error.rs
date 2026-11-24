@@ -134,8 +134,6 @@ pub enum TxError {
 /// Why a block is invalid.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum BlockError {
-    #[error("block has no transactions")]
-    Empty,
     #[error("invalid coinbase: {0}")]
     Coinbase(&'static str),
     #[error("transaction {0} is a coinbase but not the first")]

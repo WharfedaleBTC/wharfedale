@@ -1,4 +1,4 @@
-//! `connect_block` rules for M1: coinbase, ordering, fee claim, UTXO diff.
+//! `connect_block` rules: the optional coinbase, ordering, fee claim, UTXO diff.
 
 mod common;
 
@@ -54,7 +54,9 @@ fn coinbase_rules() {
     let ledger = ledger_with(&[]);
     let run = |txs: &[elements::Transaction]| connect_block(&ledger, txs, &ctx(), &VerifyCache::new());
 
-    assert_eq!(run(&[]), Err(BlockError::Empty));
+    // No transactions at all: valid (the proposer's policy is what keeps blocks from being empty).
+    let empty = run(&[]).unwrap();
+    assert!(empty.created.is_empty() && empty.spent.is_empty() && empty.fees.is_empty());
     assert!(matches!(run(&[coinbase(HEIGHT + 1, vec![explicit(&p.spk, 0, asset())])]), Err(BlockError::Coinbase(_))));
 
     let mut no_pad = coinbase(HEIGHT, vec![]);
@@ -70,14 +72,34 @@ fn coinbase_rules() {
 }
 
 #[test]
-fn first_transaction_must_be_coinbase() {
+fn block_without_coinbase_burns_its_fees() {
     let (a, b) = (Key::new(1), Key::new(2));
     let ledger = ledger_with(&[(1, &a)]);
     let tx = spend(&ledger, outpoint(1), &a, &b, 99_000, 1_000);
-    assert!(matches!(
-        connect_block(&ledger, &[tx], &ctx(), &VerifyCache::new()),
-        Err(BlockError::Coinbase(_))
-    ));
+    let diff = connect_block(&ledger, std::slice::from_ref(&tx), &ctx(), &VerifyCache::new()).unwrap();
+    assert_eq!(diff.fees.get(&asset()), Some(&1_000));
+    let created: Vec<OutPoint> = diff.created.iter().map(|(op, _)| *op).collect();
+    assert_eq!(created, vec![OutPoint::new(tx.txid(), 0)], "only the payment: nobody receives the fee");
+    assert!(diff.created.iter().all(|(_, e)| !e.is_coinbase));
+}
+
+#[test]
+fn coinbase_must_come_first() {
+    let (a, b, p) = (Key::new(1), Key::new(2), Key::new(3));
+    let ledger = ledger_with(&[(1, &a)]);
+    let tx = spend(&ledger, outpoint(1), &a, &b, 99_000, 1_000);
+    let cb = coinbase(HEIGHT, vec![explicit(&p.spk, 1_000, asset())]);
+    assert_eq!(connect_block(&ledger, &[tx, cb], &ctx(), &VerifyCache::new()), Err(BlockError::ExtraCoinbase(1)));
+}
+
+#[test]
+fn transaction_index_counts_from_zero_without_coinbase() {
+    let (a, b, c) = (Key::new(1), Key::new(2), Key::new(4));
+    let ledger = ledger_with(&[(1, &a)]);
+    let tx1 = spend(&ledger, outpoint(1), &a, &b, 99_000, 1_000);
+    let tx2 = spend(&ledger, outpoint(1), &a, &c, 99_000, 1_000);
+    let err = connect_block(&ledger, &[tx1, tx2.clone()], &ctx(), &VerifyCache::new()).unwrap_err();
+    assert_eq!(err, BlockError::Tx { index: 1, txid: tx2.txid(), error: TxError::MissingInput(0, outpoint(1)) });
 }
 
 #[test]

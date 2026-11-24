@@ -23,15 +23,22 @@ use crate::NodeState;
 /// Confirmed history page size and mempool cap (as Esplora).
 const CHAIN_PAGE: usize = 25;
 const MEMPOOL_CAP: usize = 50;
+/// `/blocks` and `/block/:hash/txs` page sizes (as Esplora).
+const BLOCKS_PAGE: u64 = 10;
+const BLOCK_TXS_PAGE: usize = 25;
 
 pub fn router() -> Router<NodeState> {
     Router::new()
         .route("/blocks/tip/height", get(tip_height))
         .route("/blocks/tip/hash", get(tip_hash))
+        .route("/blocks", get(blocks_tip))
+        .route("/blocks/:start_height", get(blocks_from))
         .route("/block-height/:height", get(block_height))
         .route("/block/:hash", get(block))
         .route("/block/:hash/status", get(block_status))
         .route("/block/:hash/txids", get(block_txids))
+        .route("/block/:hash/txs", get(block_txs))
+        .route("/block/:hash/txs/:start_index", get(block_txs_from))
         .route("/tx", post(broadcast))
         .route("/tx/:txid", get(tx))
         .route("/tx/:txid/hex", get(tx_hex))
@@ -327,6 +334,55 @@ async fn block(State(st): State<NodeState>, Path(hash): Path<String>) -> ApiResu
     blocking(st, move |st| Ok(Json(block_json(st, &block_by_hash(st, &hash)?)?))).await
 }
 
+/// Up to `BLOCKS_PAGE` blocks, descending from `start` (default and cap: the tip).
+fn blocks(st: &NodeState, start: Option<u64>) -> ApiResult<Value> {
+    let (tip, _) = st.store.tip().map_err(internal)?;
+    let start = start.unwrap_or(tip).min(tip);
+    let mut out = Vec::new();
+    for h in (start.saturating_sub(BLOCKS_PAGE - 1)..=start).rev() {
+        // A pruned body is skipped, as Esplora skips missing blocks.
+        if let Some(b) = st.store.block(h).map_err(internal)? {
+            out.push(block_json(st, &b)?);
+        }
+    }
+    Ok(json!(out))
+}
+
+async fn blocks_tip(State(st): State<NodeState>) -> ApiResult<Json<Value>> {
+    blocking(st, |st| Ok(Json(blocks(st, None)?))).await
+}
+
+async fn blocks_from(State(st): State<NodeState>, Path(start): Path<String>) -> ApiResult<Json<Value>> {
+    blocking(st, move |st| {
+        let start = start.parse::<u64>().map_err(|_| bad("Invalid height"))?;
+        Ok(Json(blocks(st, Some(start))?))
+    })
+    .await
+}
+
+/// Up to `BLOCK_TXS_PAGE` transactions of a block from `start`; `start` past the last is 400.
+fn block_txs_page(st: &NodeState, hash: &str, start: usize) -> ApiResult<Value> {
+    let block = block_by_hash(st, hash)?;
+    if start >= block.txs.len() {
+        return Err(bad("start index out of range"));
+    }
+    let h = block.height();
+    let txs: ApiResult<Vec<Value>> = block.txs.iter().skip(start).take(BLOCK_TXS_PAGE).map(|t| tx_json(st, t, Some(h))).collect();
+    Ok(json!(txs?))
+}
+
+async fn block_txs(State(st): State<NodeState>, Path(hash): Path<String>) -> ApiResult<Json<Value>> {
+    blocking(st, move |st| Ok(Json(block_txs_page(st, &hash, 0)?))).await
+}
+
+async fn block_txs_from(State(st): State<NodeState>, Path((hash, start)): Path<(String, String)>) -> ApiResult<Json<Value>> {
+    blocking(st, move |st| {
+        let start = start.parse::<usize>().map_err(|_| bad("Invalid start index"))?;
+        Ok(Json(block_txs_page(st, &hash, start)?))
+    })
+    .await
+}
+
 async fn block_status(State(st): State<NodeState>, Path(hash): Path<String>) -> ApiResult<Json<Value>> {
     blocking(st, move |st| {
         let b = block_by_hash(st, &hash)?;
@@ -479,6 +535,9 @@ async fn asset(State(st): State<NodeState>, Path(id): Path<String>) -> ApiResult
             "contract_hash": r.contract_hash,
             "reissuance_token": r.reissuance_token,
             "entropy": r.entropy,
+            "name": r.name,
+            "ticker": r.ticker,
+            "precision": r.precision,
             "chain_stats": {
                 "issuance_count": r.issuance_count,
                 "issued_amount": r.issued_amount,

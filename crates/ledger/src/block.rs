@@ -1,7 +1,9 @@
 //! Block-level validation: coinbase, per-transaction checks in order, fee claim, UTXO diff.
 //!
 //! Mirrors Elements `ConnectBlock` (transaction loop) and `VerifyCoinbaseAmount`
-//! (`src/confidential_validation.cpp:425`) with zero subsidy.
+//! (`src/confidential_validation.cpp:425`) with zero subsidy. Deviation: the coinbase is
+//! optional. It exists only to pay the block's fees to the proposer, so a block whose
+//! transactions pay none needs no coinbase; fees in a block without one are burned.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -14,26 +16,37 @@ use crate::stateless::{check_coinbase, output_kind, OutputKind};
 use crate::types::{BlockDiff, ChainCtx, FeeMap, LedgerView, UtxoEntry};
 use crate::{check_tx, context};
 
-/// Validates `txs` (coinbase first) on top of `view` and returns the state change.
-/// Pure: nothing is written; the caller applies the [`BlockDiff`].
+/// Validates `txs` (an optional coinbase first, then the rest) on top of `view` and returns
+/// the state change. Pure: nothing is written; the caller applies the [`BlockDiff`].
+///
+/// Any transaction list is structurally acceptable, the empty one included (blocks made before
+/// proposers stopped building empty ones). Not proposing empty blocks is the proposer's policy.
 pub fn connect_block<V: LedgerView>(
     view: &V,
     txs: &[Transaction],
     ctx: &ChainCtx,
     cache: &VerifyCache,
 ) -> Result<BlockDiff, BlockError> {
-    let (coinbase, rest) = txs.split_first().ok_or(BlockError::Empty)?;
-    check_coinbase(coinbase, ctx.height)?;
-    context::check_final(coinbase, ctx)
-        .map_err(|_| BlockError::Coinbase("lock_time not reached"))?;
+    // WHARFEDALE: the coinbase is optional (Elements requires one); it only pays fees.
+    let (coinbase, rest) = match txs.split_first() {
+        Some((first, rest)) if first.is_coinbase() => (Some(first), rest),
+        _ => (None, txs),
+    };
+    let offset = usize::from(coinbase.is_some());
 
-    let mut weight = coinbase.weight();
+    let mut weight = 0;
     let mut overlay = Overlay::new(view);
-    overlay.apply(coinbase, ctx.height, true)?;
+    if let Some(coinbase) = coinbase {
+        check_coinbase(coinbase, ctx.height)?;
+        context::check_final(coinbase, ctx)
+            .map_err(|_| BlockError::Coinbase("lock_time not reached"))?;
+        weight = coinbase.weight();
+        overlay.apply(coinbase, ctx.height, true)?;
+    }
 
     let mut fees = FeeMap::new();
     for (k, tx) in rest.iter().enumerate() {
-        let index = k + 1;
+        let index = k + offset;
         if tx.is_coinbase() {
             return Err(BlockError::ExtraCoinbase(index));
         }
@@ -59,7 +72,7 @@ pub fn connect_block<V: LedgerView>(
 
     // Coinbase may claim at most the collected fees, per asset (subsidy 0).
     let mut claimed: BTreeMap<AssetId, u128> = BTreeMap::new();
-    for out in &coinbase.output {
+    for out in coinbase.iter().flat_map(|c| &c.output) {
         if let (Some(asset), confidential::Value::Explicit(v)) = (out.asset.explicit(), out.value) {
             *claimed.entry(asset).or_insert(0) += u128::from(v);
         }

@@ -15,16 +15,16 @@ Wiring (`node.rs`), as Malachite's test app:
 
 | `AppMsg` | Handler |
 |---|---|
-| `ConsensusReady` | Reply `(tip_height + 1, height_params())` |
+| `ConsensusReady` | Send the validator set to the network layer (`NetworkMsg::UpdateValidatorSet`, so peers are typed before any height starts). Reply `(tip_height + 1, height_params())`, or [hold](#holding-a-height) it |
 | `StartedRound` | Record (height, round). Validate buffered parts for this height. Reply with the stored undecided proposals for (height, round) |
-| `GetValue` | `App::propose`: if `built_proposals[(h, r)]` exists, return that block. Else build (coinbase; mempool template from M3), dry-run `ledger::connect_block`, **persist** proposal + parts + built marker, reply `LocallyProposedValue(block hash)`, publish parts |
+| `GetValue` | `App::propose`: if `built_proposals[(h, r)]` exists, return that block. Else build from the mempool template (a coinbase only when it pays fees), dry-run `ledger::connect_block`, **persist** proposal + parts + built marker, reply `LocallyProposedValue(block hash)`, publish parts. Nothing in the mempool: no block; the reply is dropped and the round times out |
 | `ReceivedProposalPart` | Reassemble. Past height: drop. Height + 1: buffer if proposer, signature and structure check (≤ 16 buffered). Further ahead: drop. Current height: `App::accept_parts` — proposer, signature and structure check (else ignore); a block hash already stored for this height reuses its verdict; otherwise header + `connect_block` → `Valid`/`Invalid`; **persist**; reply `ProposedValue` |
 | `RestreamProposal` | Republish the stored parts |
 | `Decided` | `App::commit`: atomic commit (block, extended certificate, UTXO diff, tip); then reply |
-| `Finalized` | `App::commit` (idempotent: for a committed height, checks the certificate is for the stored block and updates it; a failed update is logged); log evidence; reply `Next::Start(h + 1)`, or `Next::Restart(h)` if the commit failed |
+| `Finalized` | `App::commit` (idempotent: for a committed height, checks the certificate is for the stored block and updates it; a failed update is logged); log evidence; reply `Next::Start(h + 1)` or [hold](#holding-a-height) it, or `Next::Restart(h)` if the commit failed |
 | `GetHistoryMinHeight` | Lowest stored body height (≥ 1) |
 | `GetDecidedValues` | `RawDecidedValue { value_bytes: Block::encode(), certificate }` per stored height |
-| `ProcessSyncedValue` | Decode, height or `roots_match` fails → `PeerFault`; not the next height → `LocalTransientError`; else full validation without the wall-clock check, persist, `Verdict(ProposedValue)` |
+| `ProcessSyncedValue` | Record the height as synced (the next one then starts at once). Decode, height or `roots_match` fails → `PeerFault`; not the next height → `LocalTransientError`; else full validation without the wall-clock check, persist, `Verdict(ProposedValue)` |
 | `ExtendVote` | `None` (vote extensions disabled) |
 | `VerifyVoteExtensions` | Accept |
 
@@ -36,6 +36,26 @@ Some(block_time))` with vote extensions disabled — the same at every height.
 
 Synced values carry the full encoded block in `value_bytes`; Malachite checks the certificate
 against the block hash.
+
+## Holding a height
+
+There are no empty blocks, so a validator does not start a height it has nothing to propose
+for: it keeps the `ConsensusReady` or `Finalized` reply (Malachite waits for it without a
+timeout and keeps serving sync meanwhile) and sends it when any of these holds:
+
+| Reason | Why |
+|---|---|
+| The mempool is not empty | A block can be built; gossip brings the transaction to every validator within milliseconds |
+| A peer proposed, or voted for a block (not nil), at that height or above | The network moved on; follow it (Malachite buffers its votes and our app its proposal parts until we start) |
+| The finalized height came through value sync | Catching up: never stall mid-sync |
+| The node is a full node | It doesn't vote, so holding saves nothing; starting lets sync bring a restarted full node up to date at once |
+| `create_empty_blocks = true` | Old behaviour |
+
+`run` checks this after every consensus message, on every received consensus message
+(`Event::Received`), and every 100 ms (`IDLE_CHECK`). Nil votes don't count: a validator
+alone in an idle height (one restarted while the others hold) votes nil and must not wake the
+rest. While held nothing happens: no rounds, no timeouts, no messages. A validator restarted
+while the network is idle and behind it catches up when the next transaction arrives.
 
 ## Invariants
 

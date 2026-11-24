@@ -128,6 +128,7 @@ pub fn generate_network<R: RngCore + CryptoRng>(
             role: if full { Role::Full } else { Role::Validator },
             block_time_ms: 1_000,
             fee_payout_script,
+            create_empty_blocks: false,
             p2p: P2p { listen_addr: node.listen.clone(), persistent_peers: peers_of(i), persistent_peers_only: true },
             rpc: node.rpc.clone().map(|listen_addr| Rpc { listen_addr }),
         }

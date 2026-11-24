@@ -52,7 +52,7 @@ mdbook serve docs
 | Mempool policy, ordering, eviction, wire format | `crates/mempool/tests/mempool.rs` |
 | End to end in process: confidential faucet → alice → bob, issuance, reissuance, Esplora, fee payouts, p2pk contract | `crates/node/tests/transfer.rs` |
 | End to end in Docker: 4 containers, same flow plus a timelock contract, chain agreement |
-| SDKs: cross-SDK vectors, artifact equivalence, e2e against the Docker network | `../wharfedale-sdk-rs`, `../wharfedale-sdk-ts` ([SDKs](sdk.md)) | `docker/test.sh` ([Docker](docker.md)) |
+| SDKs: cross-SDK vectors, artifact equivalence, e2e against the Docker network | `../wharfedale-sdk-rs`, `../wharfedale-sdk-ts` ([SDKs](sdk.md)) | `make test` ([Docker](docker.md)) |
 | Genesis init, atomic commit, reopen, pruning | `crates/store/tests/store.rs` |
 
 ## Milestones

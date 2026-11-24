@@ -11,7 +11,8 @@ Malachite (Tendermint BFT, Rust) decides one block per height over the fixed gen
 | Proposer selection | Round-robin over the set sorted by address: index `(height − 1 + round) mod n` |
 | Signing | Ed25519 (`arc-malachitebft-signing-ed25519`) |
 | Value | `Value(ValueId)` = block hash; the full block travels as signed proposal parts |
-| Rewards | None. The coinbase may claim at most the block's fees |
+| Rewards | None. A coinbase, present only when the block pays fees, claims at most them |
+| Empty blocks | None: a height starts only when there is a transaction ([holding a height](app-loop.md#holding-a-height)) |
 | Misbehaviour | `Finalized.evidence` (double vote/proposal) is logged and alerted; no slashing |
 | Reorgs | None |
 

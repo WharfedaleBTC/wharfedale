@@ -163,7 +163,9 @@ async fn confidential_transfers_issuance_and_esplora() {
     for home in &homes {
         nodes.push(node::start(home).await.unwrap());
     }
-    tokio::time::timeout(Duration::from_secs(60), nodes[0].tip.wait_for(|h| *h >= 2)).await.unwrap().unwrap();
+    // No empty blocks: with nothing to include, the chain stays at genesis.
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    assert!(nodes.iter().all(|n| *n.tip.borrow() == 0), "an idle network built a block");
 
     let faucet = load_key(&dir.path().join("faucet.json")).unwrap();
     let alice = write_key(&dir.path().join("alice.json"), 0xa1);
@@ -183,6 +185,7 @@ async fn confidential_transfers_issuance_and_esplora() {
 
     let info = blocking({ let u = urls[0].clone(); move || Rpc(u).call("getblockchaininfo", json!([])).unwrap() }).await;
     let fee_asset: elements::AssetId = info["fee_asset"].as_str().unwrap().parse().unwrap();
+    assert_eq!(info["role"], json!("validator"));
     let balance = |secret: [u8; 32], asset: elements::AssetId| {
         let u = urls[1].clone();
         blocking(move || balances(&Rpc(u), &secret).unwrap().get(&asset).copied().unwrap_or(0))
@@ -206,7 +209,7 @@ async fn confidential_transfers_issuance_and_esplora() {
     // Issue 1 000 units + 1 token, then reissue 500 more with the token.
     let u = urls[0].clone();
     let (iss_txid, asset, token) = blocking(move || issue(&Rpc(u), &alice, 1_000, 1, FEE)).await.unwrap();
-    confirmed(urls[0].clone(), iss_txid.to_string()).await;
+    let iss_height = confirmed(urls[0].clone(), iss_txid.to_string()).await;
     assert_eq!(balance(alice, asset).await, 1_000);
     assert_eq!(balance(alice, token).await, 1);
 
@@ -229,7 +232,23 @@ async fn confidential_transfers_issuance_and_esplora() {
     // Esplora views.
     let u = urls[3].clone();
     let height: u64 = blocking(move || ureq::get(&format!("{u}/blocks/tip/height")).call().unwrap().into_string().unwrap()).await.parse().unwrap();
-    assert!(height >= 5);
+    assert!(height >= 4);
+    let blocks = rest(&urls[3], "blocks").unwrap();
+    let heights: Vec<u64> = blocks.as_array().unwrap().iter().map(|b| b["height"].as_u64().unwrap()).collect();
+    assert!(heights.len() == 10.min(heights[0] as usize + 1) && heights[0] >= height && heights.windows(2).all(|w| w[0] == w[1] + 1), "{heights:?}");
+    let page = rest(&urls[3], &format!("blocks/{iss_height}")).unwrap();
+    assert_eq!(page[0]["height"], json!(iss_height));
+    let iss_block = page[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(page[0], rest(&urls[3], &format!("block/{iss_block}")).unwrap());
+    let txs = rest(&urls[3], &format!("block/{iss_block}/txs")).unwrap();
+    let txs = txs.as_array().unwrap();
+    assert_eq!(txs.len() as u64, page[0]["tx_count"].as_u64().unwrap());
+    assert_eq!(txs[0]["vin"][0]["is_coinbase"], json!(true));
+    let iss_json = txs.iter().find(|t| t["txid"] == json!(iss_txid.to_string())).expect("issuance in its block");
+    assert_eq!(iss_json, &rest(&urls[3], &format!("tx/{iss_txid}")).unwrap());
+    assert_eq!(rest(&urls[3], &format!("block/{iss_block}/txs/1")).unwrap().as_array().unwrap().len(), txs.len() - 1);
+    // The wallet's issuance carries no WFA1 output: no name.
+    assert!(record["name"].is_null() && record["ticker"].is_null() && record["precision"].is_null(), "{record}");
     let (u, f) = (urls[3].clone(), fund.to_string());
     let outspends = eventually("outspends indexed", move || rest(&u, &format!("tx/{f}/outspends")).filter(|v| v[0]["spent"] == json!(true))).await;
     assert_eq!(outspends[0]["txid"], json!(pay.to_string()));
@@ -273,6 +292,22 @@ async fn confidential_transfers_issuance_and_esplora() {
     // Overspend refused.
     let (u, b) = (urls[0].clone(), address(&bob).to_string());
     assert!(blocking(move || send(&Rpc(u), &alice, &b, 100_000_000, None, FEE)).await.is_err());
+
+    // Idle again: no new blocks. Every block has a transaction, and a coinbase that claimed
+    // exactly its fees (every standard transaction pays one).
+    let tip = *nodes[0].tip.borrow();
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    assert!(nodes.iter().all(|n| *n.tip.borrow() == tip), "an idle network built a block");
+    for h in 1..=tip {
+        let hash = blocking({ let u = urls[0].clone(); move || Rpc(u).call("getblockhash", json!([h])).unwrap() }).await;
+        let txs = rest(&urls[0], &format!("block/{}/txs", hash.as_str().unwrap())).unwrap();
+        let txs = txs.as_array().unwrap();
+        assert!(txs.len() >= 2, "block {h}: {txs:?}");
+        assert_eq!(txs[0]["vin"][0]["is_coinbase"], json!(true), "block {h}");
+        let fees: u64 = txs[1..].iter().map(|t| t["fee"].as_u64().unwrap()).sum();
+        let claimed: u64 = txs[0]["vout"].as_array().unwrap().iter().map(|o| o["value"].as_u64().unwrap()).sum();
+        assert_eq!(claimed, fees, "block {h}");
+    }
 
     for n in nodes {
         n.shutdown().await;

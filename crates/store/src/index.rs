@@ -40,6 +40,72 @@ pub struct AssetRecord {
     pub has_blinded_issuances: bool,
     /// Explicit reissuance tokens created.
     pub reissuance_tokens: u64,
+    /// From a WFA1 output of the issuance transaction ([`asset_metadata`]); never changed by
+    /// reissuances. Absent in records written before these fields existed.
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub ticker: Option<String>,
+    #[serde(default)]
+    pub precision: Option<u8>,
+}
+
+/// Tag of an asset-metadata output: `OP_RETURN <"WFA1"> <metadata>`.
+pub const WFA1_TAG: &[u8; 4] = b"WFA1";
+/// Longest metadata accepted, in bytes.
+pub const WFA1_MAX_METADATA: usize = 128;
+
+/// Name, ticker and precision of an asset, from WFA1 metadata.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssetMetadata {
+    pub name: String,
+    pub ticker: String,
+    pub precision: u8,
+}
+
+/// The metadata pushed by `script`, if it is exactly `OP_RETURN <"WFA1"> <metadata>` with
+/// minimal pushes (as `Builder::push_slice` writes them) and at most `WFA1_MAX_METADATA` bytes.
+pub fn wfa1_payload(script: &Script) -> Option<&[u8]> {
+    const PREFIX: [u8; 6] = [0x6a, 0x04, b'W', b'F', b'A', b'1']; // OP_RETURN, push 4
+    let rest = script.as_bytes().strip_prefix(&PREFIX)?;
+    let (len, data) = match *rest.first()? {
+        n @ 0x01..=0x4b => (n as usize, &rest[1..]),
+        0x4c => (*rest.get(1)? as usize, &rest[2..]), // OP_PUSHDATA1
+        _ => return None,
+    };
+    let minimal = rest[0] != 0x4c || len > 0x4b;
+    (minimal && data.len() == len && len <= WFA1_MAX_METADATA).then_some(data)
+}
+
+/// Parses WFA1 metadata: a UTF-8 JSON object with `name` (1–64 characters after trimming, no
+/// control characters), `ticker` (`^[A-Z0-9]{1,8}$`) and `precision` (integer 0–8). Other keys
+/// are ignored. The name is returned trimmed.
+pub fn parse_asset_metadata(bytes: &[u8]) -> Option<AssetMetadata> {
+    let v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let obj = v.as_object()?;
+    let name = obj.get("name")?.as_str()?.trim();
+    let chars = name.chars().count();
+    if !(1..=64).contains(&chars) || name.chars().any(char::is_control) {
+        return None;
+    }
+    let ticker = obj.get("ticker")?.as_str()?;
+    if !(1..=8).contains(&ticker.len()) || !ticker.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()) {
+        return None;
+    }
+    let precision = obj.get("precision")?.as_u64().filter(|p| *p <= 8)? as u8;
+    Some(AssetMetadata { name: name.to_owned(), ticker: ticker.to_owned(), precision })
+}
+
+/// Metadata naming a new issuance with `contract_hash`: the first output of `tx` that is a
+/// valid WFA1 output with an explicit value and whose metadata hashes (SHA-256, raw bytes) to
+/// `contract_hash`.
+pub fn asset_metadata(tx: &Transaction, contract_hash: &[u8; 32]) -> Option<AssetMetadata> {
+    tx.output
+        .iter()
+        .filter(|o| o.value.is_explicit())
+        .filter_map(|o| wfa1_payload(&o.script_pubkey))
+        .filter(|m| sha256::Hash::hash(m).to_byte_array() == *contract_hash)
+        .find_map(parse_asset_metadata)
 }
 
 impl Store {
@@ -187,8 +253,10 @@ impl Store {
                 r
             }
             None => {
-                let contract = if iss.asset_blinding_nonce.is_null() { iss.asset_entropy.to_byte_array() } else { [0; 32] };
-                let entropy = if iss.asset_blinding_nonce.is_null() {
+                let new_issuance = iss.asset_blinding_nonce.is_null();
+                let contract = if new_issuance { iss.asset_entropy.to_byte_array() } else { [0; 32] };
+                let meta = if new_issuance { asset_metadata(tx, &contract) } else { None };
+                let entropy = if new_issuance {
                     AssetId::generate_asset_entropy(input.previous_output, elements::ContractHash::from_byte_array(contract))
                 } else {
                     iss.asset_entropy
@@ -206,6 +274,9 @@ impl Store {
                     issued_amount: amount,
                     has_blinded_issuances: blinded,
                     reissuance_tokens: tokens,
+                    name: meta.as_ref().map(|m| m.name.clone()),
+                    ticker: meta.as_ref().map(|m| m.ticker.clone()),
+                    precision: meta.map(|m| m.precision),
                 }
             }
         })

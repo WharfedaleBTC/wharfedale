@@ -38,10 +38,14 @@ async fn handle(State(state): State<NodeState>, body: axum::body::Bytes) -> Json
         Some(Value::Array(a)) => a.clone(),
         Some(_) => return Json(response(id, Err(RpcError::new(-32602, "params must be an array")))),
     };
-    // Validation is CPU-bound: keep it off the async workers.
-    let result = tokio::task::spawn_blocking(move || methods::call(&state, &method, &params))
-        .await
-        .unwrap_or_else(|e| Err(RpcError::new(-32603, format!("internal error: {e}"))));
+    let result = if method == "getnetworkinfo" {
+        methods::getnetworkinfo(&state).await
+    } else {
+        // Validation is CPU-bound: keep it off the async workers.
+        tokio::task::spawn_blocking(move || methods::call(&state, &method, &params))
+            .await
+            .unwrap_or_else(|e| Err(RpcError::new(-32603, format!("internal error: {e}"))))
+    };
     Json(response(id, result))
 }
 

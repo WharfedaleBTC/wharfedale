@@ -50,6 +50,7 @@ moniker           = "node-0"
 role              = "validator"                # or "full"; default "validator"
 block_time_ms     = 1000                       # Malachite target_time per height
 fee_payout_script = "5120…"                    # validators: taproot scriptPubKey for coinbase payouts
+create_empty_blocks = false                    # default: blocks only when there are transactions
 
 [p2p]
 listen_addr           = "/ip4/0.0.0.0/tcp/27000"

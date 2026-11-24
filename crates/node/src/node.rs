@@ -18,8 +18,8 @@ use malachitebft_app_channel::app::types::codec::Codec;
 use malachitebft_app_channel::app::types::Keypair;
 
 use malachitebft_app_channel::{
-    ConsensusContext, EngineBuilder, EngineHandle, NetworkContext, NetworkIdentity, RequestContext, SyncContext,
-    WalContext,
+    ConsensusContext, EngineBuilder, EngineHandle, NetworkContext, NetworkIdentity, NetworkRequest, RequestContext,
+    SyncContext, WalContext,
 };
 use malachitebft_signing::Signer as _;
 use tokio::task::JoinHandle;
@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use wharfedale_ledger::VerifyCache;
 use wharfedale_mempool::{Mempool, Policy};
-use wharfedale_rpc::NodeState;
+use wharfedale_rpc::{NetworkInfo, NetworkInfoFn, NodeRole, NodeState, PeerInfo};
 use wharfedale_store::Store;
 
 use crate::gossip;
@@ -107,6 +107,39 @@ impl NodeHandle {
             tracing::warn!("indexer did not stop within 30 s");
         }
     }
+}
+
+/// `getnetworkinfo` source: a state dump from the network actor.
+fn network_info(requests: mpsc::Sender<NetworkRequest>) -> NetworkInfoFn {
+    Arc::new(move || {
+        let requests = requests.clone();
+        Box::pin(async move {
+            let dump = NetworkRequest::dump_state(&requests)
+                .await
+                .map_err(|e| format!("network state request failed: {e}"))?
+                .ok_or("network state unavailable")?;
+            let local = dump.local_node;
+            Ok(NetworkInfo {
+                peer_id: local.peer_id.to_string(),
+                moniker: local.moniker,
+                consensus_address: local.consensus_address.map(|a| a.to_ascii_lowercase()),
+                listen_addrs: vec![local.listen_addr.to_string()],
+                peers: dump
+                    .peers
+                    .into_iter()
+                    .map(|(id, p)| PeerInfo {
+                        peer_id: id.to_string(),
+                        moniker: p.moniker,
+                        address: p.address.to_string(),
+                        validator: p.consensus_address.is_some() || p.peer_type.is_validator(),
+                        consensus_address: p.consensus_address.map(|a| a.to_ascii_lowercase()),
+                        direction: p.connection_direction.map(|d| d.as_str().to_owned()),
+                        score: p.score,
+                    })
+                    .collect(),
+            })
+        })
+    })
 }
 
 /// Starts a node from `home`: a validator or a full node, by `config.role`.
@@ -183,6 +216,11 @@ pub async fn start(home: &Path) -> Result<NodeHandle> {
         fee_asset,
         coinbase_maturity: app::COINBASE_MATURITY,
         relay: relay_tx,
+        role: match config.role {
+            Role::Validator => NodeRole::Validator,
+            Role::Full => NodeRole::Full,
+        },
+        network_info: Some(network_info(channels.net_requests.clone())),
     };
     let span = tracing::error_span!("node", moniker = %config.moniker);
 
@@ -238,7 +276,7 @@ pub async fn start(home: &Path) -> Result<NodeHandle> {
         rpc_task = Some((stop, task));
     }
 
-    let mut state = App::new(node_state, validator_set, address, proposer, config.block_time(), tip_tx)?;
+    let mut state = App::new(node_state, validator_set, address, proposer, config.block_time(), config.create_empty_blocks, tip_tx)?;
     let app = tokio::spawn(
         async move {
             if let Err(e) = app::run(&mut state, &mut channels).await {

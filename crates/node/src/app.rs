@@ -14,9 +14,12 @@ use malachitebft_app_channel::app::types::core::utils::height::HeightRangeExt;
 use malachitebft_app_channel::app::types::core::{
     ExtendedCommitCertificate, Round, Validity, VoteExtensionPolicy,
 };
+use malachitebft_app_channel::app::engine::util::events::Event;
+use malachitebft_app_channel::app::types::core::{Proposal as _, Vote as _};
 use malachitebft_app_channel::app::types::sync::RawDecidedValue;
-use malachitebft_app_channel::app::types::{LocallyProposedValue, ProposedValue};
-use malachitebft_app_channel::{AppMsg, Channels, NetworkMsg};
+use malachitebft_app_channel::app::types::{LocallyProposedValue, ProposedValue, SignedConsensusMsg};
+use malachitebft_app_channel::{AppMsg, Channels, NetworkMsg, Reply};
+use tokio::sync::broadcast::error::RecvError;
 use prost::Message as _;
 use tracing::{debug, error, info, warn};
 use wharfedale_chain::{check_header, merkle, sha256d, Block, Header};
@@ -44,6 +47,25 @@ pub const COINBASE_MATURITY: u64 = 1;
 pub const COINBASE_WEIGHT_RESERVE: usize = 4_000;
 /// Complete proposals for the next height held until it starts.
 pub const MAX_FUTURE_PROPOSALS: usize = 16;
+/// How often a node holding the next height checks its mempool again.
+pub const IDLE_CHECK: Duration = Duration::from_millis(100);
+
+/// A height consensus is waiting for the application to start, held while there is nothing to
+/// put in a block.
+enum Held {
+    /// The first height after startup (`ConsensusReady`).
+    First(Height, Reply<(Height, HeightParams<WharfedaleContext>)>),
+    /// The height after a finalized one (`Finalized`).
+    Next(Height, Reply<Next<WharfedaleContext>>),
+}
+
+impl Held {
+    fn height(&self) -> Height {
+        match self {
+            Held::First(h, _) | Held::Next(h, _) => *h,
+        }
+    }
+}
 
 /// What a validator needs to propose: its consensus key and where its coinbase pays fees.
 pub struct Proposer {
@@ -69,6 +91,15 @@ pub struct App {
     future: Vec<ProposalParts>,
     /// Publishes the committed tip height.
     tip: tokio::sync::watch::Sender<u64>,
+    /// Build blocks with no transactions (config `create_empty_blocks`).
+    create_empty_blocks: bool,
+    /// The height to start, held until there is something to put in it.
+    held: Option<Held>,
+    /// Highest height for which a peer proposed a block or voted for one: the network has
+    /// moved on to it.
+    peer_height: Height,
+    /// Last height whose value came through value sync: a node catching up never holds.
+    synced: Option<Height>,
 }
 
 impl App {
@@ -78,6 +109,7 @@ impl App {
         address: Address,
         proposer: Option<Proposer>,
         block_time: Duration,
+        create_empty_blocks: bool,
         tip: tokio::sync::watch::Sender<u64>,
     ) -> Result<Self> {
         tip.send_replace(node.store.tip()?.0);
@@ -94,6 +126,10 @@ impl App {
             validated: HashMap::new(),
             future: Vec::new(),
             tip,
+            create_empty_blocks,
+            held: None,
+            peer_height: Height::new(0),
+            synced: None,
         })
     }
 
@@ -115,20 +151,22 @@ impl App {
         &self.node.store
     }
 
-    /// Mempool template + coinbase claiming its fees, validated. Transactions that no longer
-    /// validate are dropped from the template and the mempool.
-    fn assemble(&self, h: u64, ctx: &ChainCtx, fee_script: &Script) -> Result<(Vec<Transaction>, BlockDiff)> {
+    /// Mempool template, validated, behind a coinbase when it pays fees. `None` when nothing
+    /// in the mempool can go in (unless `create_empty_blocks`): we never build an empty block.
+    /// Transactions that no longer validate are dropped from the template and the mempool.
+    fn assemble(&self, h: u64, ctx: &ChainCtx, fee_script: &Script) -> Result<Option<(Vec<Transaction>, BlockDiff)>> {
         let max = MAX_BLOCK_WEIGHT - COINBASE_WEIGHT_RESERVE;
         let mut candidates: Vec<Transaction> =
             self.node.pool().template(max).iter().map(|t| (**t).clone()).collect();
         let fees = loop {
-            let mut txs = vec![coinbase(h, 0, self.node.fee_asset, fee_script)];
-            txs.extend(candidates.iter().cloned());
-            match connect_block(&*self.node.store, &txs, ctx, &self.node.cache) {
+            if candidates.is_empty() && !self.create_empty_blocks {
+                return Ok(None);
+            }
+            match connect_block(&*self.node.store, &candidates, ctx, &self.node.cache) {
                 Ok(diff) => break diff.fees,
                 Err(BlockError::Tx { index, txid, error }) => {
                     warn!(height = h, %txid, "dropping transaction from template: {error}");
-                    candidates.remove(index - 1);
+                    candidates.remove(index);
                     self.node.pool().remove(&txid);
                 }
                 Err(e) => return Err(e.into()),
@@ -136,10 +174,59 @@ impl App {
         };
         // Fees in other assets (only a non-standard proposer includes them) stay unclaimed.
         let claim = fees.get(&self.node.fee_asset).copied().unwrap_or(0);
-        let mut txs = vec![coinbase(h, claim, self.node.fee_asset, fee_script)];
+        let mut txs = Vec::with_capacity(candidates.len() + 1);
+        if claim > 0 {
+            txs.push(coinbase(h, claim, self.node.fee_asset, fee_script));
+        }
         txs.extend(candidates);
         let diff = connect_block(&*self.node.store, &txs, ctx, &self.node.cache)?;
-        Ok((txs, diff))
+        Ok(Some((txs, diff)))
+    }
+
+    /// Whether the next height should start: the mempool has work, a peer already proposed
+    /// or voted for a block at it, or we are catching up through sync. A full node never
+    /// holds: it doesn't vote, so waiting saves nothing, and starting lets value sync bring a
+    /// restarted full node up to date at once.
+    fn ready_for(&self, next: Height) -> bool {
+        self.create_empty_blocks
+            || self.proposer.is_none()
+            || self.synced.is_some_and(|h| h.increment() >= next)
+            || self.peer_height >= next
+            || self.future.iter().any(|p| p.height >= next)
+            || !self.node.pool().is_empty()
+    }
+
+    /// A proposal, or a vote for a block (not nil), at a height above ours means the network
+    /// moved on: a held node must follow. Nil votes don't count (a restarted node alone in an
+    /// idle height votes nil and must not wake everyone up).
+    fn observe(&mut self, event: &Event<WharfedaleContext>) {
+        let height = match event {
+            Event::Received(SignedConsensusMsg::Proposal(p)) => p.message.height(),
+            Event::Received(SignedConsensusMsg::Vote(v)) if !v.message.value().is_nil() => v.message.height(),
+            _ => return,
+        };
+        if height > self.peer_height {
+            self.peer_height = height;
+        }
+    }
+
+    /// Starts the held height once there is a reason to.
+    fn release(&mut self) {
+        if !self.held.as_ref().is_some_and(|held| self.ready_for(held.height())) {
+            return;
+        }
+        let params = self.height_params();
+        match self.held.take() {
+            Some(Held::First(height, reply)) => {
+                info!(%height, "starting height: work to do");
+                let _ = reply.send((height, params));
+            }
+            Some(Held::Next(height, reply)) => {
+                info!(%height, "starting height: work to do");
+                let _ = reply.send(Next::Start(height, params));
+            }
+            None => {}
+        }
     }
 
     fn expected_proposer(&self, height: Height, round: Round) -> Address {
@@ -149,21 +236,24 @@ impl App {
     // ---- building ----
 
     /// Builds, dry-runs and persists our block for (height, round). Re-returns a block already
-    /// built for that slot, so a restarted node proposes the same block.
-    fn propose(&mut self, height: Height, round: Round) -> Result<(Block, ProposalParts)> {
+    /// built for that slot, so a restarted node proposes the same block. `None`: nothing to
+    /// propose (an empty mempool and no `create_empty_blocks`).
+    fn propose(&mut self, height: Height, round: Round) -> Result<Option<(Block, ProposalParts)>> {
         let h = height.as_u64();
         let r = round.as_u32().ok_or_else(|| eyre!("propose in nil round"))?;
         let proposer = self.proposer.as_ref().ok_or_else(|| eyre!("a full node does not propose"))?;
         if let Some(hash) = self.store().built(h, r)? {
             if let (Some(record), Some(parts)) = (self.store().undecided_by_hash(h, &hash)?, self.store().parts(h, &hash)?) {
                 let (_, block) = records::decode_proposal(&record)?;
-                return Ok((block, records::decode_parts(&parts)?));
+                return Ok(Some((block, records::decode_parts(&parts)?)));
             }
         }
 
         let parent = self.store().header(h - 1)?.ok_or_else(|| eyre!("missing parent header {}", h - 1))?;
         let ctx = self.chain_ctx(h)?;
-        let (txs, diff) = self.assemble(h, &ctx, &proposer.fee_script)?;
+        let Some((txs, diff)) = self.assemble(h, &ctx, &proposer.fee_script)? else {
+            return Ok(None);
+        };
         let header = Header {
             version: Header::VERSION,
             height: h,
@@ -189,8 +279,8 @@ impl App {
         self.store().put_parts(h, &hash, &records::encode_parts(&parts)?)?;
         self.store().put_built(h, r, &hash)?;
         self.validated.insert(hash, diff);
-        info!(height = h, round = r, %hash, "built block");
-        Ok((block, parts))
+        info!(height = h, round = r, %hash, txs = block.txs.len(), "built block");
+        Ok(Some((block, parts)))
     }
 
     fn sign_parts(&self, signer: &Ed25519Signer, block: &Block, height: Height, round: Round) -> ProposalParts {
@@ -332,8 +422,8 @@ impl App {
     }
 }
 
-/// Coinbase for `height`: claims `fee` of `fee_asset` to `fee_script`, or burns nothing with an
-/// empty `OP_RETURN` when there is no fee. One output at most, whatever the block contains.
+/// Coinbase for `height`: pays the block's `fee` of `fee_asset` to `fee_script`. Built only
+/// for a block whose transactions pay fees; one output, whatever the block contains.
 pub fn coinbase(height: u64, fee: u64, fee_asset: AssetId, fee_script: &Script) -> Transaction {
     let script_sig = Builder::new().push_int(height as i64).push_slice(b"wharfedale").into_script();
     let explicit = |asset: AssetId, value: u64, spk: Script| TxOut {
@@ -343,11 +433,7 @@ pub fn coinbase(height: u64, fee: u64, fee_asset: AssetId, fee_script: &Script) 
         script_pubkey: spk,
         witness: TxOutWitness::empty(),
     };
-    let output = if fee > 0 {
-        vec![explicit(fee_asset, fee, fee_script.clone())]
-    } else {
-        vec![explicit(AssetId::from_byte_array([0; 32]), 0, Script::new_op_return(&[]))]
-    };
+    let output = vec![explicit(fee_asset, fee, fee_script.clone())];
     Transaction {
         version: 2,
         lock_time: LockTime::ZERO,
@@ -402,11 +488,30 @@ fn unix_now() -> u64 {
 /// The application loop. Returns when the consensus channel closes. A failure handling one
 /// message (storage, network) is logged and the loop goes on: the dropped reply makes
 /// consensus time out or retry, never stops the node.
+///
+/// Besides consensus messages it watches received consensus traffic and, every
+/// [`IDLE_CHECK`], the mempool, to start a held height as soon as there is work.
 pub async fn run(app: &mut App, channels: &mut Channels<WharfedaleContext>) -> Result<()> {
-    while let Some(msg) = channels.consensus.recv().await {
-        if let Err(e) = handle(app, channels, msg).await {
-            error!("handling consensus message failed: {e:#}");
+    let mut events = channels.events.subscribe();
+    let mut events_open = true;
+    let mut idle = tokio::time::interval(IDLE_CHECK);
+    idle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            msg = channels.consensus.recv() => {
+                let Some(msg) = msg else { break };
+                if let Err(e) = handle(app, channels, msg).await {
+                    error!("handling consensus message failed: {e:#}");
+                }
+            }
+            event = events.recv(), if events_open => match event {
+                Ok(event) => app.observe(&event),
+                Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => events_open = false,
+            },
+            _ = idle.tick() => {}
         }
+        app.release();
     }
     Ok(())
 }
@@ -421,8 +526,16 @@ async fn handle(
             AppMsg::ConsensusReady { reply } => {
                 let (tip, _) = app.node.store.tip()?;
                 let start = Height::new(tip + 1);
-                info!(%start, "consensus ready");
-                let _ = reply.send((start, app.height_params()));
+                // The network layer types peers (validator or full) by the validator set, which
+                // it otherwise learns only when a height starts: give it now, in case we hold.
+                channels.network.send(NetworkMsg::UpdateValidatorSet(app.validator_set.clone())).await?;
+                if app.ready_for(start) {
+                    info!(%start, "consensus ready");
+                    let _ = reply.send((start, app.height_params()));
+                } else {
+                    info!(%start, "consensus ready; holding the first height until there is a transaction");
+                    app.held = Some(Held::First(start, reply));
+                }
             }
 
             AppMsg::StartedRound { height, round, proposer, reply_value, .. } => {
@@ -449,7 +562,11 @@ async fn handle(
             }
 
             AppMsg::GetValue { height, round, reply, .. } => {
-                let (block, parts) = app.propose(height, round)?;
+                let Some((block, parts)) = app.propose(height, round)? else {
+                    // Dropping the reply: consensus times out the round and moves on.
+                    info!(%height, %round, "nothing to propose");
+                    return Ok(());
+                };
                 let _ = reply.send(LocallyProposedValue::new(height, round, Value::new(block.hash())));
                 for msg in stream_messages(&parts, height, round) {
                     channels.network.send(NetworkMsg::PublishProposalPart(msg)).await?;
@@ -498,14 +615,19 @@ async fn handle(
                 }
                 let height = certificate.height;
                 let cert = ExtendedCommitCertificate::from_commit_certificate_and_extensions(certificate, extensions);
-                let next = match app.commit(&cert) {
-                    Ok(()) => Next::Start(height.increment(), app.height_params()),
+                match app.commit(&cert) {
+                    Ok(()) if app.ready_for(height.increment()) => {
+                        let _ = reply.send(Next::Start(height.increment(), app.height_params()));
+                    }
+                    Ok(()) => {
+                        info!(height = %height.increment(), "holding height until there is a transaction");
+                        app.held = Some(Held::Next(height.increment(), reply));
+                    }
                     Err(e) => {
                         error!(%height, "commit on Finalized failed, restarting height: {e}");
-                        Next::Restart(height, app.height_params())
+                        let _ = reply.send(Next::Restart(height, app.height_params()));
                     }
-                };
-                let _ = reply.send(next);
+                }
             }
 
             AppMsg::GetHistoryMinHeight { reply } => {
@@ -534,6 +656,7 @@ async fn handle(
                         if block.height() != tip + 1 {
                             SyncedValueOutcome::LocalTransientError
                         } else {
+                            app.synced = Some(height);
                             let validity = match app.validate_block(&block, proposer, None) {
                                 Ok(()) => Validity::Valid,
                                 Err(e) => {
