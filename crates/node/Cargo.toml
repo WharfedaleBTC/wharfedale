@@ -1,0 +1,48 @@
+[package]
+name = "wharfedale-node"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "wharfedale"
+path = "src/main.rs"
+
+[dependencies]
+wharfedale-ledger        = { workspace = true }
+wharfedale-chain         = { workspace = true }
+wharfedale-store         = { workspace = true }
+wharfedale-mempool       = { workspace = true }
+wharfedale-consensus-ctx = { workspace = true }
+wharfedale-rpc           = { workspace = true }
+
+malachitebft-app-channel = { workspace = true }
+malachitebft-config      = { workspace = true }
+malachitebft-signing     = { workspace = true }
+
+async-trait        = { workspace = true }
+bytes              = { workspace = true }
+clap               = { workspace = true }
+elements           = { workspace = true }
+eyre               = { workspace = true }
+hex                = { workspace = true }
+prost              = { workspace = true }
+rand               = { workspace = true }
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+tokio              = { workspace = true }
+toml               = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+wharfedale-ledger-simplicity-sys = { workspace = true }
+tempfile = { workspace = true }
+wharfedale-sdk = { workspace = true }
+serde_json = { workspace = true }
+ureq = { workspace = true }
+tracing-subscriber = { workspace = true }

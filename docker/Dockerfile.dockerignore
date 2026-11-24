@@ -1,0 +1,10 @@
+# Applies to builds using docker/Dockerfile (context = parent of wharfedale/ and malachite/).
+**/target
+**/.git
+**/node_modules
+docs
+wharfedale/docs/book
+malachite/docs
+malachite/specs
+malachite/terraform
+malachite/assets

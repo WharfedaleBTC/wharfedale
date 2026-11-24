@@ -1,0 +1,30 @@
+[package]
+name = "wharfedale-consensus-ctx"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+elements                     = { workspace = true }
+malachitebft-app             = { workspace = true }
+malachitebft-codec           = { workspace = true }
+malachitebft-core-consensus  = { workspace = true }
+malachitebft-core-types      = { workspace = true }
+malachitebft-proto           = { workspace = true }
+malachitebft-signing         = { workspace = true }
+malachitebft-signing-ed25519 = { workspace = true }
+malachitebft-sync            = { workspace = true }
+async-trait       = { workspace = true }
+bytes             = { workspace = true }
+ed25519-consensus = { workspace = true }
+hex               = { workspace = true }
+prost             = { workspace = true }
+rand              = { workspace = true }
+serde             = { workspace = true, features = ["rc"] }
+sha3              = "0.10"
+signature         = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }
+protox      = { workspace = true }

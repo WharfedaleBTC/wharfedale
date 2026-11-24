@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+import "consensus.proto";
+import "liveness.proto";
+
+package wharfedale;
+
+message PeerId {
+    bytes id = 1;
+}
+
+message Status {
+    PeerId peer_id = 1;
+    uint64 height = 2;
+    uint64 earliest_height = 3;
+}
+
+message ValueRequest {
+    uint64 height = 1;
+    optional uint64 end_height = 2;
+}
+
+message ValueResponse {
+    uint64 start_height = 1;
+    repeated SyncedValue values = 2;
+}
+
+message SyncedValue {
+    bytes value_bytes = 1;
+    ExtendedCommitCertificate certificate = 2;
+}
+
+// A per-validator certificate entry. Each entry carries the validator's
+// precommit signature and, when present, the extension attached to that
+// validator's precommit.
+message ExtendedCommitSignature {
+    Address validator_address = 1;
+    Signature signature = 2;
+    // Vote extension signed for this precommit's (height, round, value_id,
+    // validator_address) scope. Absent if the height has extensions disabled.
+    optional Extension extension = 3;
+}
+
+message ExtendedCommitCertificate {
+    uint64 height = 1;
+    uint32 round = 2;
+    ValueId value_id = 3;
+    repeated ExtendedCommitSignature signatures = 4;
+}
+
+message ProposedValue {
+    uint64 height = 1;
+    uint32 round = 2;
+    optional uint32 valid_round = 3;
+    Address proposer = 4;
+    Value value = 5;
+    bool validity = 6;
+}
+
+message SyncRequest {
+  oneof request {
+    ValueRequest value_request = 1;
+  }
+}
+
+message SyncResponse {
+  oneof response {
+    ValueResponse value_response = 1;
+  }
+}

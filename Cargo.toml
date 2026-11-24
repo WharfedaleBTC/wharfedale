@@ -1,0 +1,89 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ledger",
+    "crates/ledger-simplicity-sys",
+    "crates/chain",
+    "crates/store",
+    "crates/mempool",
+    "crates/consensus-ctx",
+    "crates/rpc",
+    "crates/node",
+    "crates/wallet-cli",
+]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2021"
+rust-version = "1.88"
+publish      = false
+
+# secp256k1-zkp 0.11 computes `max_value + 1` for a rangeproof's range: a valid 64-bit proof
+# overflows. Never let a peer-supplied proof panic a node built with overflow checks.
+[profile.dev.package.secp256k1-zkp]
+overflow-checks = false
+
+[profile.release.package.secp256k1-zkp]
+overflow-checks = false
+
+[workspace.dependencies]
+# Internal
+wharfedale-ledger                = { path = "crates/ledger" }
+wharfedale-ledger-simplicity-sys = { path = "crates/ledger-simplicity-sys" }
+# Client SDK (separate repository, next to this one).
+wharfedale-sdk = { path = "../wharfedale-sdk-rs" }
+wharfedale-chain                 = { path = "crates/chain" }
+wharfedale-store                 = { path = "crates/store" }
+wharfedale-mempool               = { path = "crates/mempool" }
+wharfedale-consensus-ctx         = { path = "crates/consensus-ctx" }
+wharfedale-rpc                   = { path = "crates/rpc" }
+
+# Types, encoding, sighash, issuance, blinding. secp256k1-zkp is used ONLY via
+# `elements::secp256k1_zkp` (elements 0.27 pins secp256k1-zkp 0.11).
+elements        = { version = "0.27.0" }
+# Simplicity: program types, CMR, satisfier (wallet side). Consensus exec goes
+# through `wharfedale-ledger-simplicity-sys`.
+simplicity-lang = { version = "0.9.0", features = ["elements"] }
+simplicity-sys  = { version = "0.8.0" }
+simplicityhl    = { version = "0.9.0" }
+
+# Malachite: our fork, checked out next to this repo (see docs/src/repositories.md).
+# Every arc-malachitebft-* crate MUST come from the same checkout / rev.
+malachitebft-app-channel     = { package = "arc-malachitebft-app-channel",     path = "../malachite/code/crates/app-channel" }
+malachitebft-app             = { package = "arc-malachitebft-app",             path = "../malachite/code/crates/app" }
+malachitebft-codec           = { package = "arc-malachitebft-codec",           path = "../malachite/code/crates/codec" }
+malachitebft-config          = { package = "arc-malachitebft-config",          path = "../malachite/code/crates/config" }
+malachitebft-core-consensus  = { package = "arc-malachitebft-core-consensus",  path = "../malachite/code/crates/core-consensus" }
+malachitebft-core-types      = { package = "arc-malachitebft-core-types",      path = "../malachite/code/crates/core-types", features = ["serde"] }
+malachitebft-peer            = { package = "arc-malachitebft-peer",            path = "../malachite/code/crates/peer", features = ["rand", "serde"] }
+malachitebft-proto           = { package = "arc-malachitebft-proto",           path = "../malachite/code/crates/proto" }
+malachitebft-signing         = { package = "arc-malachitebft-signing",         path = "../malachite/code/crates/signing" }
+malachitebft-signing-ed25519 = { package = "arc-malachitebft-signing-ed25519", path = "../malachite/code/crates/signing-ed25519", features = ["rand", "serde"] }
+malachitebft-sync            = { package = "arc-malachitebft-sync",            path = "../malachite/code/crates/sync" }
+
+# Storage
+redb = "2.6.3"
+
+# Runtime, errors, serialization (versions aligned with the Malachite workspace)
+async-trait        = "0.1.89"
+axum               = "0.7"
+bytes              = "1"
+clap               = { version = "4.5", features = ["derive"] }
+ed25519-consensus  = "2.1.0"
+eyre               = "0.6"
+hex                = { version = "0.4.3", features = ["serde"] }
+libp2p-identity    = { version = "0.2.12", features = ["ed25519"] }
+prost              = "0.13"
+prost-build        = "0.13"
+protox             = "0.8.0"
+rand               = { version = "0.8.5", features = ["std_rng", "small_rng"] }
+serde              = { version = "1", features = ["derive"] }
+serde_json         = "1.0"
+signature          = "2.2.0"
+tempfile           = "3.25.0"
+thiserror          = "2"
+tokio              = { version = "1.47.1", features = ["full"] }
+toml               = "0.8.21"
+ureq               = { version = "2", default-features = false, features = ["json"] }
+tracing            = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }

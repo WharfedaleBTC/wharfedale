@@ -1,0 +1,9 @@
+[book]
+title = "Wharfedale"
+description = "Private layer-1 node: Malachite BFT + Elements-format confidential UTXO ledger + Simplicity"
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"

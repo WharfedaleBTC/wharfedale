@@ -1,0 +1,62 @@
+# Wharfedale local network: 4 validators + example and end-to-end test runners.
+#
+#   docker compose -f docker/compose.yml up -d --build                 # network
+#   docker compose -f docker/compose.yml --profile example run --rm example
+#   docker compose -f docker/compose.yml --profile test run --rm e2e   # exit code = result
+#   docker compose -f docker/compose.yml down -v                       # stop, wipe chain
+#
+# RPC: node0..node3 on host ports 18443..18446.
+
+name: wharfedale
+
+x-image: &image
+  image: wharfedale:dev
+  volumes:
+    - net:/net
+
+x-node: &node
+  <<: *image
+  restart: unless-stopped
+  depends_on:
+    init:
+      condition: service_completed_successfully
+
+x-runner: &runner
+  <<: *image
+  depends_on:
+    node0: { condition: service_started }
+    node1: { condition: service_started }
+    node2: { condition: service_started }
+    node3: { condition: service_started }
+
+services:
+  # Builds the image and generates genesis, keys and configs once (kept in the `net` volume).
+  init:
+    <<: *image
+    build:
+      context: ../..
+      dockerfile: wharfedale/docker/Dockerfile
+    command:
+      - sh
+      - -c
+      - "[ -f /net/faucet.json ] || wharfedale testnet --nodes 4 --home /net --hosts node0,node1,node2,node3 --chain-id wharfedale-docker"
+
+  node0: { <<: *node, command: [wharfedale, start, --home, /net/node-0], ports: ["18443:18443"] }
+  node1: { <<: *node, command: [wharfedale, start, --home, /net/node-1], ports: ["18444:18443"] }
+  node2: { <<: *node, command: [wharfedale, start, --home, /net/node-2], ports: ["18445:18443"] }
+  node3: { <<: *node, command: [wharfedale, start, --home, /net/node-3], ports: ["18446:18443"] }
+
+  # Walkthrough: faucet → alice → bob, printing every step.
+  example:
+    <<: *runner
+    profiles: [example]
+    command: [example.sh]
+
+  # End-to-end assertions; exits non-zero on failure.
+  e2e:
+    <<: *runner
+    profiles: [test]
+    command: [e2e.sh]
+
+volumes:
+  net: {}

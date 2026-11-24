@@ -1,0 +1,15 @@
+[package]
+name = "wharfedale-ledger-simplicity-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+elements        = { workspace = true }
+simplicity-lang = { workspace = true }
+simplicity-sys  = { workspace = true, features = ["test-utils"] }
+
+[dev-dependencies]
+simplicityhl = { workspace = true }
+serde_json   = { workspace = true }
