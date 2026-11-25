@@ -58,7 +58,8 @@ async fn network_info(url: String, done: impl Fn(&Value) -> bool + Send + Clone 
 }
 
 fn peers_with_role<'a>(info: &'a Value, role: &str) -> Vec<&'a Value> {
-    info["peers"].as_array().unwrap().iter().filter(|p| p["role"] == json!(role)).collect()
+    // No `peers` (the RPC server not up yet) counts as none.
+    info["peers"].as_array().into_iter().flatten().filter(|p| p["role"] == json!(role)).collect()
 }
 
 async fn block_hash(url: String, h: u64) -> Value {
@@ -90,11 +91,10 @@ async fn full_node_follows_relays_and_catches_up() {
     }
     let mut fnode = node::start(&fhomes[0]).await.unwrap();
 
-    // getnetworkinfo: the full node sees the 4 validators; a validator sees the full node.
-    // The validators' roles as seen *from the full node* are not asserted: Malachite drops a
-    // validator proof that arrives before consensus subscribes to network events, so a peer can
-    // stay typed "full" until it reconnects (a fork issue, not this RPC).
-    let info = network_info(url(&full[0]), |v| v["peers"].as_array().is_some_and(|p| p.len() == 4)).await;
+    // getnetworkinfo: the full node sees the 4 validators, typed as validators by their proofs
+    // (each is sent once per connection, often before consensus subscribes; the network replays
+    // it); a validator sees the full node.
+    let info = network_info(url(&full[0]), |v| peers_with_role(v, "validator").len() == 4).await;
     assert_eq!(info["role"], json!("full"));
     assert!(info["consensus_address"].is_null() && info["peer_id"].is_string() && info["height"].is_u64(), "{info}");
     assert!(info["listen_addrs"][0].as_str().is_some_and(|a| a.starts_with("/ip4/127.0.0.1/tcp/")), "{info}");
@@ -102,6 +102,7 @@ async fn full_node_follows_relays_and_catches_up() {
     assert_eq!(peers.len(), 4, "{info}");
     assert!(peers.windows(2).all(|w| w[0]["moniker"].as_str() <= w[1]["moniker"].as_str()), "sorted: {info}");
     assert!(peers.iter().all(|p| p["moniker"].as_str().is_some_and(|m| m.starts_with("node-"))), "{info}");
+    assert!(peers.iter().all(|p| p["role"] == json!("validator") && p["consensus_address"].is_string()), "{info}");
     let full_moniker = NodeConfig::load(fhome.config()).unwrap().moniker;
     let vinfo = network_info(url(&validators[0]), |v| peers_with_role(v, "full").len() == 1).await;
     assert_eq!(vinfo["role"], json!("validator"));

@@ -38,6 +38,18 @@ Two more `WHARFEDALE:` changes let the application hold a height while the netwo
 | `app-channel` | `src/connector.rs` | `ConsensusReady`: wait for the application's reply in a spawned task, as upstream already does for `Finalized`, so a held first height doesn't block other host messages (sync requests from peers) |
 | `app-channel` | `src/msgs.rs` | `NetworkMsg::UpdateValidatorSet(ValidatorSet)` → `network::Msg::UpdateValidatorSet`: the network layer types peers by the validator set and otherwise learns it only when a height starts |
 
+## Validator proof replay (same branch)
+
+A peer sends its validator proof once per connection, usually right after connecting. The
+network actor starts before consensus subscribes to it, so a proof could arrive with no
+subscriber and be lost; the peer then stayed typed non-validator until it reconnected (a full
+node's `getnetworkinfo` listed validators as `full`).
+
+| Crate | File | Change |
+|---|---|---|
+| `engine` | `src/network.rs` | Keep the decoded proof of each connected peer (dropped on `PeerDisconnected`) and replay it to every new subscriber, after the listen addresses, peers and subscriptions upstream already replays |
+| tests | `test/tests/unit/network_proof_replay.rs` | Two network actors on localhost: a late subscriber gets the connected validator's proof; after it disconnects, no proof is replayed |
+
 ## Properties
 
 - Inbound application bytes never reach the consensus or sync actors; `NetworkEvent` is unchanged.
