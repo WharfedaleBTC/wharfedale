@@ -36,7 +36,7 @@ Three steps; cheap checks come before any proof or signature.
 | | fee ≥ ⌈`min_fee_per_kvb` × vsize / 1000⌉ | `FeeTooLow` |
 | | No input spent by a pool transaction; every input confirmed | `Conflict(i, txid)`, `MissingInput(i)` |
 | | Room, after evicting strictly lower fee rates | `PoolFull` |
-| `verify` (no lock) | `ledger::check_tx` for height tip + 1 (shared `VerifyCache`) | `Invalid(TxError)`; remembered unless lock, maturity, missing input or `SimplicityNodeFault` |
+| `verify` (no lock) | `ledger::check_tx` for height tip + 1 (full verification, nothing cached) | `Invalid(TxError)`; remembered unless lock, maturity, missing input or `SimplicityNodeFault` |
 | `insert` (pool lock) | Re-check duplicates, conflicts and inputs (a block or another admission may have intervened); evict; insert | as above |
 
 `Mempool::admit` runs the three in a row. `NodeState::admit` (crate `wharfedale-rpc`) runs them
@@ -57,7 +57,7 @@ an outpoint the block spent; then `expire(now)`.
 3. `connect_block(template)`. A failing transaction (`BlockError::Tx { index }`) is dropped
    from the template and the pool; back to 2.
 4. If the fee-asset fees are > 0, put a coinbase claiming them (one output) in front;
-   `connect_block` again (cache hits).
+   `connect_block` again.
 
 ## Gossip
 

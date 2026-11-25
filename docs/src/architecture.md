@@ -26,7 +26,7 @@ One process, `wharfedale`. Malachite orders blocks, the ledger validates them, r
 
 | Crate | Responsibility | Depends on |
 |---|---|---|
-| `wharfedale-ledger` | Consensus rules; `LedgerView` trait; verification cache | elements, ledger-simplicity-sys |
+| `wharfedale-ledger` | Consensus rules; `LedgerView` trait | elements, ledger-simplicity-sys |
 | `wharfedale-ledger-simplicity-sys` | FFI to `simplicity_elements_execSimplicity` (only `unsafe` crate) | simplicity-sys |
 | `wharfedale-chain` | `Block`, `Header`, `Genesis`, merkle roots, encoding | ledger |
 | `wharfedale-store` | redb tables, atomic commit, indexer | ledger, chain |
@@ -41,10 +41,10 @@ on Malachite.
 
 ## Transaction lifecycle
 
-1. Client → `rpc` `sendrawtransaction` → `mempool::admit` → `ledger::check_tx` (cached by wtxid).
+1. Client → `rpc` `sendrawtransaction` → `mempool::admit` → `ledger::check_tx` (full verification).
 2. `mempool` publishes a batch on the Malachite `Mempool` channel; peers run `admit` on it.
 3. Proposer: `GetValue` → `mempool` template → `ledger::connect_block` dry run → proposal parts.
-4. Validators: `ReceivedProposalPart` → `ledger::connect_block` dry run (cache hits) → Valid/Invalid.
+4. Validators: `ReceivedProposalPart` → `ledger::connect_block` dry run (every transaction verified again) → Valid/Invalid.
 5. `Decided` → `store` commits block + certificate + UTXO diff atomically → `mempool::on_block`.
 
 ## Block lifecycle

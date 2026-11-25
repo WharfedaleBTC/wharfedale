@@ -44,16 +44,12 @@ pub struct BlockDiff {
     pub fees: FeeMap,
 }
 
-pub struct VerifyCache; // wtxids whose amounts and spends all verified; bounded (FIFO, 100 000)
 ```
 
 `MemoryLedger` is an in-memory `LedgerView` for tests, tools and mempool scratch state.
 
-The cache is keyed by wtxid. A wtxid commits to every prevout, and an outpoint's output never
-changes (txids are unique; BIP34 makes coinbase txids unique). So a cached result holds in any
-state where the inputs exist. An entry is written only after the whole `check_tx` passed, so
-invalid transactions never occupy it; one cache serves one chain (the genesis hash is in every
-sighash, not in the key).
+No verification result is cached: every `check_tx` runs the amount proofs, signatures and
+Simplicity programs again.
 
 ## Errors
 

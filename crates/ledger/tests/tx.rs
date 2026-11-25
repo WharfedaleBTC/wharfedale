@@ -5,10 +5,10 @@ mod common;
 use common::*;
 use elements::{LockTime, SchnorrSighashType, Script, Sequence, TxOut, Witness};
 use wharfedale_ledger::consts::{SEQUENCE_LOCKTIME_DISABLE_FLAG, SEQUENCE_LOCKTIME_TYPE_FLAG};
-use wharfedale_ledger::{check_tx, ChainCtx, MemoryLedger, TxError, UtxoEntry, VerifyCache};
+use wharfedale_ledger::{check_tx, ChainCtx, MemoryLedger, TxError, UtxoEntry};
 
 fn run(ledger: &MemoryLedger, tx: &elements::Transaction) -> Result<wharfedale_ledger::FeeMap, TxError> {
-    check_tx(ledger, tx, &ctx(), &VerifyCache::new())
+    check_tx(ledger, tx, &ctx())
 }
 
 fn simple(a: &Key, b: &Key) -> (MemoryLedger, elements::Transaction) {
@@ -24,10 +24,8 @@ fn simple(a: &Key, b: &Key) -> (MemoryLedger, elements::Transaction) {
 fn key_path_spend_is_valid_and_returns_fees() {
     let (a, b) = (Key::new(1), Key::new(2));
     let (ledger, tx) = simple(&a, &b);
-    let cache = VerifyCache::new();
-    let fees = check_tx(&ledger, &tx, &ctx(), &cache).unwrap();
+    let fees = check_tx(&ledger, &tx, &ctx()).unwrap();
     assert_eq!(fees.get(&asset()), Some(&1_000));
-    assert!(cache.contains(tx.wtxid()));
 }
 
 #[test]
@@ -79,7 +77,7 @@ fn wrong_genesis_is_rejected() {
     let (a, b) = (Key::new(1), Key::new(2));
     let (ledger, tx) = simple(&a, &b);
     let other = ChainCtx { genesis_hash: elements::BlockHash::from_byte_array([1; 32]), ..ctx() };
-    assert_eq!(check_tx(&ledger, &tx, &other, &VerifyCache::new()), Err(TxError::BadSignature(0)));
+    assert_eq!(check_tx(&ledger, &tx, &other), Err(TxError::BadSignature(0)));
 }
 
 #[test]
@@ -122,26 +120,14 @@ fn explicit_output_total_is_capped() {
 }
 
 #[test]
-fn failed_transactions_are_not_cached() {
-    // Amounts are valid, the signature is not: nothing may be cached.
+fn a_valid_result_is_never_reused() {
+    // No verification results are cached: the same transaction, checked again under another
+    // chain's context (a different genesis hash in the sighash), fails.
     let (a, b) = (Key::new(1), Key::new(2));
-    let (ledger, mut tx) = simple(&a, &b);
-    tx.input[0].witness.script_witness = Witness::from_slice(&[vec![1u8; 64]]);
-    let cache = VerifyCache::new();
-    assert_eq!(check_tx(&ledger, &tx, &ctx(), &cache), Err(TxError::BadSignature(0)));
-    assert!(cache.is_empty());
-}
-
-#[test]
-fn verify_cache_is_bounded() {
-    let (a, b) = (Key::new(1), Key::new(2));
-    let cache = VerifyCache::with_capacity(2);
-    for n in 1..=3u8 {
-        let ledger = ledger_with(&[(n, &a)]);
-        let tx = sign_all(&ledger, unsigned(&[outpoint(n)], vec![explicit(&b.spk, 99_000, asset()), fee(1_000)]), &a);
-        check_tx(&ledger, &tx, &ctx(), &cache).unwrap();
-    }
-    assert_eq!(cache.len(), 2);
+    let (ledger, tx) = simple(&a, &b);
+    assert!(check_tx(&ledger, &tx, &ctx()).is_ok());
+    let other = ChainCtx { genesis_hash: elements::BlockHash::from_byte_array([1; 32]), ..ctx() };
+    assert_eq!(check_tx(&ledger, &tx, &other), Err(TxError::BadSignature(0)));
 }
 
 #[test]
@@ -226,7 +212,7 @@ fn coinbase_outputs_mature_after_one_block() {
     let tx = sign_all(&ledger, tx, &a);
     assert_eq!(run(&ledger, &tx), Err(TxError::ImmatureCoinbase(0)));
     let next = ChainCtx { height: HEIGHT + 1, ..ctx() };
-    assert!(check_tx(&ledger, &tx, &next, &VerifyCache::new()).is_ok());
+    assert!(check_tx(&ledger, &tx, &next).is_ok());
 }
 
 #[test]

@@ -18,7 +18,7 @@ Wiring (`node.rs`), as Malachite's test app:
 | `ConsensusReady` | Send the validator set to the network layer (`NetworkMsg::UpdateValidatorSet`, so peers are typed before any height starts). Reply `(tip_height + 1, height_params())`, or [hold](#holding-a-height) it |
 | `StartedRound` | Record (height, round). Validate buffered parts for this height. Reply with the stored undecided proposals for (height, round) |
 | `GetValue` | `App::propose`: if `built_proposals[(h, r)]` exists, return that block. Else build from the mempool template (a coinbase only when it pays fees), dry-run `ledger::connect_block`, **persist** proposal + parts + built marker, reply `LocallyProposedValue(block hash)`, publish parts. Nothing in the mempool: no block; the reply is dropped and the round times out |
-| `ReceivedProposalPart` | Reassemble. Past height: drop. Height + 1: buffer if proposer, signature and structure check (≤ 16 buffered). Further ahead: drop. Current height: `App::accept_parts` — proposer, signature and structure check (else ignore); a block hash already stored for this height reuses its verdict; otherwise header + `connect_block` → `Valid`/`Invalid`; **persist**; reply `ProposedValue` |
+| `ReceivedProposalPart` | Reassemble. Past height: drop. Height + 1: buffer if proposer, signature and structure check (≤ 16 buffered). Further ahead: drop. Current height: `App::accept_parts` — proposer, signature and structure check (else ignore); a block hash already found **invalid** at this height keeps that verdict; anything else gets header + `connect_block` → `Valid`/`Invalid`; **persist**; reply `ProposedValue` |
 | `RestreamProposal` | Republish the stored parts |
 | `Decided` | `App::commit`: atomic commit (block, extended certificate, UTXO diff, tip); then reply |
 | `Finalized` | `App::commit` (idempotent: for a committed height, checks the certificate is for the stored block and updates it; a failed update is logged); log evidence; reply `Next::Start(h + 1)` or [hold](#holding-a-height) it, or `Next::Restart(h)` if the commit failed |
@@ -66,8 +66,10 @@ while the network is idle and behind it catches up when the next transaction arr
    the height and we must return identical answers, or we equivocate.
 3. **Commit before acknowledging.** `Decided` is acknowledged only after the redb transaction
    commits (fsync).
-4. **Validate once.** The dry-run `BlockDiff` is cached by block hash and applied on commit;
-   a cache miss re-runs `connect_block` in the commit path.
+4. **Remember only failures.** No verification result is cached. A block is validated when it
+   is proposed or received, again at commit, and again if it is proposed in a later round;
+   only an invalid verdict for a block hash at a height is kept (an invalid block stays
+   invalid on the same parent). The mempool likewise remembers only rejected wtxids.
 
 ## Crash recovery
 

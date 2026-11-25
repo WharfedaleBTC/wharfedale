@@ -11,7 +11,7 @@
 | 5 | Spends | Per input: taproot key path or Simplicity ([Simplicity](simplicity.md)) | `VerifyWitnessProgram` (taproot branch) |
 | 6 | Fees | Return Σ explicit fee outputs per asset | `GetFeeMap` |
 
-Stages 4 and 5 are cached in `VerifyCache` (amounts by wtxid; spends by wtxid and input).
+Stages 4 and 5 run on every check: no verification result is cached.
 Their results depend only on the transaction, the spent outputs and the genesis hash, so they
 stay valid across blocks. Parallel verification across inputs and outputs is planned (M6).
 

@@ -12,7 +12,7 @@ use elements::{
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use wharfedale_ledger::{check_tx, LedgerView, MemoryLedger, ProofLoc, TxError, UtxoEntry, VerifyCache};
+use wharfedale_ledger::{check_tx, LedgerView, MemoryLedger, ProofLoc, TxError, UtxoEntry};
 
 fn blinding(seed: u8) -> (SecretKey, PublicKey) {
     let sk = SecretKey::from_slice(&[seed; 32]).unwrap();
@@ -31,7 +31,7 @@ fn to_blind(key: &Key, value: u64, asset: AssetId, blinder: PublicKey) -> TxOut 
 }
 
 fn run(view: &MemoryLedger, tx: &Transaction) -> Result<wharfedale_ledger::FeeMap, TxError> {
-    check_tx(view, tx, &ctx(), &VerifyCache::new())
+    check_tx(view, tx, &ctx())
 }
 
 /// alice (explicit 100 000) → bob 60 000 confidential + alice change 39 000 confidential + fee.

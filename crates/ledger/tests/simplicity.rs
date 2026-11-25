@@ -10,7 +10,7 @@ use elements::{LockTime, Script, Sequence, Transaction, TxOut, Witness};
 use simplicity::jet::elements::{ElementsEnv, ElementsUtxo};
 use simplicity::Cmr;
 use simplicityhl::{ast::ElementsJetHinter, CompiledProgram, TemplateAst, UnresolvedValues};
-use wharfedale_ledger::{check_tx, MemoryLedger, TxError, UtxoEntry, VerifyCache};
+use wharfedale_ledger::{check_tx, MemoryLedger, TxError, UtxoEntry};
 use wharfedale_ledger_simplicity_sys::taproot;
 
 const P2PK: &str = "fn main() {
@@ -83,7 +83,7 @@ fn locked(spk: &Script) -> (MemoryLedger, Vec<TxOut>) {
 }
 
 fn run(ledger: &MemoryLedger, tx: &Transaction) -> Result<wharfedale_ledger::FeeMap, TxError> {
-    check_tx(ledger, tx, &ctx(), &VerifyCache::new())
+    check_tx(ledger, tx, &ctx())
 }
 
 /// A p2pk contract output spent to `Key::new(2)`, signed by the owner.
@@ -100,10 +100,8 @@ fn p2pk_spend() -> (MemoryLedger, Contract, Transaction) {
 #[test]
 fn p2pk_contract_spend_is_valid() {
     let (ledger, _, tx) = p2pk_spend();
-    let cache = VerifyCache::new();
-    let fees = check_tx(&ledger, &tx, &ctx(), &cache).unwrap();
+    let fees = check_tx(&ledger, &tx, &ctx()).unwrap();
     assert_eq!(fees.get(&asset()), Some(&1_000));
-    assert!(cache.contains(tx.wtxid()));
 }
 
 #[test]

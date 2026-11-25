@@ -9,7 +9,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use elements::{confidential, AssetId, OutPoint, Transaction};
 
-use crate::cache::VerifyCache;
 use crate::consts::{MAX_BLOCK_WEIGHT, MAX_MONEY};
 use crate::error::{BlockError, TxError};
 use crate::stateless::{check_coinbase, output_kind, OutputKind};
@@ -25,7 +24,6 @@ pub fn connect_block<V: LedgerView>(
     view: &V,
     txs: &[Transaction],
     ctx: &ChainCtx,
-    cache: &VerifyCache,
 ) -> Result<BlockDiff, BlockError> {
     // WHARFEDALE: the coinbase is optional (Elements requires one); it only pays fees.
     let (coinbase, rest) = match txs.split_first() {
@@ -54,7 +52,7 @@ pub fn connect_block<V: LedgerView>(
         if weight > MAX_BLOCK_WEIGHT {
             return Err(BlockError::TooHeavy(weight));
         }
-        let tx_fees = check_tx(&overlay, tx, ctx, cache)
+        let tx_fees = check_tx(&overlay, tx, ctx)
             .map_err(|error| BlockError::Tx { index, txid: tx.txid(), error })?;
         for (asset, fee) in tx_fees {
             let total = fees.entry(asset).or_insert(0);

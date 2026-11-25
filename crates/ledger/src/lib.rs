@@ -9,7 +9,6 @@
 
 mod amounts;
 mod block;
-pub mod cache;
 pub mod consts;
 mod context;
 pub mod error;
@@ -19,7 +18,6 @@ mod stateless;
 pub mod types;
 
 pub use block::connect_block;
-pub use cache::VerifyCache;
 pub use error::{BlockError, ProofLoc, TxError};
 pub use memory::MemoryLedger;
 pub use stateless::{coinbase_height_prefix, output_kind, OutputKind};
@@ -39,17 +37,13 @@ pub fn check_tx<V: LedgerView>(
     view: &V,
     tx: &Transaction,
     ctx: &ChainCtx,
-    cache: &VerifyCache,
 ) -> Result<FeeMap, TxError> {
     let fees = stateless::check(tx)?;
     let spent = context::resolve_inputs(view, tx, ctx)?;
     context::check_final(tx, ctx)?;
     context::check_sequence_locks(tx, &spent, view, ctx)?;
-    let wtxid = tx.wtxid();
-    if !cache.contains(wtxid) {
-        amounts::verify(tx, &spent)?;
-        spend::verify(tx, &spent, ctx)?;
-        cache.insert(wtxid);
-    }
+    // Proofs, signatures and Simplicity run on every call: no results are cached.
+    amounts::verify(tx, &spent)?;
+    spend::verify(tx, &spent, ctx)?;
     Ok(fees)
 }

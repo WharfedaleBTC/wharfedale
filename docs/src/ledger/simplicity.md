@@ -23,10 +23,10 @@ cost analysis against the budget, then execute.
 
 **Error mapping** (as Elements `CheckSimplicity`): `NO_ERROR` → valid. `MALLOC`,
 `NOT_YET_IMPLEMENTED`, or the call returning `false` → `SimplicityNodeFault`: a local failure,
-never cached; a proposal hitting it gets a nil prevote from this node. Every other code (e.g.
+not remembered as invalid; a proposal hitting it gets a nil prevote from this node. Every other code (e.g.
 `CMR`, `EXEC_JET`, `EXEC_BUDGET`) → `SimplicityRejected`: the input is invalid.
 
-Only successes are cached: `VerifyCache` records a wtxid after its amounts and every spend passed.
+Results are not cached: every check executes the program again.
 
 ## `wharfedale-ledger-simplicity-sys`
 
@@ -56,7 +56,7 @@ the decoder and evaluator); C symbols are prefixed `rustsimplicity_0_8_`.
 | Everything else | Identical to Liquid |
 
 There is no current-height jet, so a Simplicity result depends only on the transaction, the
-spent outputs and the genesis hash, and is cacheable.
+spent outputs and the genesis hash.
 
 ## Tooling
 

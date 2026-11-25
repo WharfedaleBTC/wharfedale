@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use elements::{AssetId, BlockHash, Transaction, Txid};
 use tokio::sync::mpsc;
-use wharfedale_ledger::{ChainCtx, VerifyCache};
+use wharfedale_ledger::{ChainCtx};
 use wharfedale_mempool::{AdmitError, Mempool, Source};
 use wharfedale_store::Store;
 
@@ -75,7 +75,6 @@ pub type NetworkInfoFn =
 pub struct NodeState {
     pub store: Arc<Store>,
     pub mempool: Arc<Mutex<Mempool>>,
-    pub cache: Arc<VerifyCache>,
     pub chain_id: String,
     pub genesis_hash: BlockHash,
     pub fee_asset: AssetId,
@@ -109,7 +108,7 @@ impl NodeState {
     pub fn test_accept(&self, tx: Transaction) -> Result<Txid, AdmitError> {
         let ctx = self.next_block_ctx().map_err(AdmitError::Unavailable)?;
         let candidate = self.pool().precheck(tx, Source::Local, &*self.store)?;
-        if let Err(e) = wharfedale_mempool::verify(&candidate, &*self.store, &ctx, &self.cache) {
+        if let Err(e) = wharfedale_mempool::verify(&candidate, &*self.store, &ctx) {
             self.pool().record_failure(candidate.wtxid, &e);
             return Err(e.into());
         }
@@ -122,7 +121,7 @@ impl NodeState {
         let ctx = self.next_block_ctx().map_err(AdmitError::Unavailable)?;
         let relay = (source == Source::Local).then(|| tx.clone());
         let candidate = self.pool().precheck(tx, source, &*self.store)?;
-        if let Err(e) = wharfedale_mempool::verify(&candidate, &*self.store, &ctx, &self.cache) {
+        if let Err(e) = wharfedale_mempool::verify(&candidate, &*self.store, &ctx) {
             self.pool().record_failure(candidate.wtxid, &e);
             return Err(e.into());
         }

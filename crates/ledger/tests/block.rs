@@ -4,7 +4,7 @@ mod common;
 
 use common::*;
 use elements::{OutPoint, Script};
-use wharfedale_ledger::{connect_block, BlockError, LedgerView, TxError, VerifyCache};
+use wharfedale_ledger::{connect_block, BlockError, LedgerView, TxError};
 
 fn spend(ledger: &impl LedgerView, from: OutPoint, key: &Key, to: &Key, value: u64, fee_value: u64) -> elements::Transaction {
     sign_all(ledger, unsigned(&[from], vec![explicit(&to.spk, value, asset()), fee(fee_value)]), key)
@@ -16,7 +16,7 @@ fn valid_block_produces_diff() {
     let mut ledger = ledger_with(&[(1, &a)]);
     let tx = spend(&ledger, outpoint(1), &a, &b, 99_000, 1_000);
     let cb = coinbase(HEIGHT, vec![explicit(&p.spk, 1_000, asset())]);
-    let diff = connect_block(&ledger, &[cb.clone(), tx.clone()], &ctx(), &VerifyCache::new()).unwrap();
+    let diff = connect_block(&ledger, &[cb.clone(), tx.clone()], &ctx()).unwrap();
 
     assert_eq!(diff.fees.get(&asset()), Some(&1_000));
     assert_eq!(diff.spent.iter().map(|(op, _)| *op).collect::<Vec<_>>(), vec![outpoint(1)]);
@@ -36,7 +36,7 @@ fn coinbase_may_not_overclaim() {
     let tx = spend(&ledger, outpoint(1), &a, &b, 99_000, 1_000);
     let cb = coinbase(HEIGHT, vec![explicit(&p.spk, 1_001, asset())]);
     assert_eq!(
-        connect_block(&ledger, &[cb, tx], &ctx(), &VerifyCache::new()),
+        connect_block(&ledger, &[cb, tx], &ctx()),
         Err(BlockError::CoinbaseOverclaim(asset()))
     );
 }
@@ -44,7 +44,7 @@ fn coinbase_may_not_overclaim() {
 #[test]
 fn empty_block_with_op_return_coinbase_is_valid() {
     let cb = coinbase(HEIGHT, vec![explicit(&Script::new_op_return(b""), 0, asset())]);
-    let diff = connect_block(&ledger_with(&[]), &[cb], &ctx(), &VerifyCache::new()).unwrap();
+    let diff = connect_block(&ledger_with(&[]), &[cb], &ctx()).unwrap();
     assert!(diff.created.is_empty() && diff.spent.is_empty() && diff.fees.is_empty());
 }
 
@@ -52,7 +52,7 @@ fn empty_block_with_op_return_coinbase_is_valid() {
 fn coinbase_rules() {
     let p = Key::new(3);
     let ledger = ledger_with(&[]);
-    let run = |txs: &[elements::Transaction]| connect_block(&ledger, txs, &ctx(), &VerifyCache::new());
+    let run = |txs: &[elements::Transaction]| connect_block(&ledger, txs, &ctx());
 
     // No transactions at all: valid (the proposer's policy is what keeps blocks from being empty).
     let empty = run(&[]).unwrap();
@@ -76,7 +76,7 @@ fn block_without_coinbase_burns_its_fees() {
     let (a, b) = (Key::new(1), Key::new(2));
     let ledger = ledger_with(&[(1, &a)]);
     let tx = spend(&ledger, outpoint(1), &a, &b, 99_000, 1_000);
-    let diff = connect_block(&ledger, std::slice::from_ref(&tx), &ctx(), &VerifyCache::new()).unwrap();
+    let diff = connect_block(&ledger, std::slice::from_ref(&tx), &ctx()).unwrap();
     assert_eq!(diff.fees.get(&asset()), Some(&1_000));
     let created: Vec<OutPoint> = diff.created.iter().map(|(op, _)| *op).collect();
     assert_eq!(created, vec![OutPoint::new(tx.txid(), 0)], "only the payment: nobody receives the fee");
@@ -89,7 +89,7 @@ fn coinbase_must_come_first() {
     let ledger = ledger_with(&[(1, &a)]);
     let tx = spend(&ledger, outpoint(1), &a, &b, 99_000, 1_000);
     let cb = coinbase(HEIGHT, vec![explicit(&p.spk, 1_000, asset())]);
-    assert_eq!(connect_block(&ledger, &[tx, cb], &ctx(), &VerifyCache::new()), Err(BlockError::ExtraCoinbase(1)));
+    assert_eq!(connect_block(&ledger, &[tx, cb], &ctx()), Err(BlockError::ExtraCoinbase(1)));
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn transaction_index_counts_from_zero_without_coinbase() {
     let ledger = ledger_with(&[(1, &a)]);
     let tx1 = spend(&ledger, outpoint(1), &a, &b, 99_000, 1_000);
     let tx2 = spend(&ledger, outpoint(1), &a, &c, 99_000, 1_000);
-    let err = connect_block(&ledger, &[tx1, tx2.clone()], &ctx(), &VerifyCache::new()).unwrap_err();
+    let err = connect_block(&ledger, &[tx1, tx2.clone()], &ctx()).unwrap_err();
     assert_eq!(err, BlockError::Tx { index: 1, txid: tx2.txid(), error: TxError::MissingInput(0, outpoint(1)) });
 }
 
@@ -109,7 +109,7 @@ fn second_coinbase_is_rejected() {
     let mut cb2 = coinbase(HEIGHT, vec![explicit(&p.spk, 1, asset())]);
     cb2.input[0].script_sig = Script::from(vec![0x5a, 0x01]);
     assert_eq!(
-        connect_block(&ledger_with(&[]), &[cb, cb2], &ctx(), &VerifyCache::new()),
+        connect_block(&ledger_with(&[]), &[cb, cb2], &ctx()),
         Err(BlockError::ExtraCoinbase(1))
     );
 }
@@ -128,7 +128,7 @@ fn chained_spend_within_block() {
     let tx2 = spend(&after_tx1, OutPoint::new(tx1.txid(), 0), &b, &c, 98_000, 1_000);
 
     let cb = coinbase(HEIGHT, vec![explicit(&p.spk, 2_000, asset())]);
-    let diff = connect_block(&ledger, &[cb.clone(), tx1, tx2.clone()], &ctx(), &VerifyCache::new()).unwrap();
+    let diff = connect_block(&ledger, &[cb.clone(), tx1, tx2.clone()], &ctx()).unwrap();
     let created: Vec<OutPoint> = diff.created.iter().map(|(op, _)| *op).collect();
     assert_eq!(created, vec![OutPoint::new(cb.txid(), 0), OutPoint::new(tx2.txid(), 0)]);
     assert_eq!(diff.spent.len(), 1);
@@ -142,7 +142,7 @@ fn double_spend_within_block_is_rejected() {
     let tx1 = spend(&ledger, outpoint(1), &a, &b, 99_000, 1_000);
     let tx2 = spend(&ledger, outpoint(1), &a, &c, 99_000, 1_000);
     let cb = coinbase(HEIGHT, vec![explicit(&Script::new_op_return(b""), 0, asset())]);
-    let err = connect_block(&ledger, &[cb, tx1, tx2.clone()], &ctx(), &VerifyCache::new()).unwrap_err();
+    let err = connect_block(&ledger, &[cb, tx1, tx2.clone()], &ctx()).unwrap_err();
     assert_eq!(
         err,
         BlockError::Tx { index: 2, txid: tx2.txid(), error: TxError::MissingInput(0, outpoint(1)) }
@@ -160,6 +160,6 @@ fn coinbase_output_is_immature_in_its_own_block() {
         wharfedale_ledger::UtxoEntry::new(cb.output[0].clone(), HEIGHT, true),
     );
     let tx = sign_all(&view, unsigned(&[OutPoint::new(cb.txid(), 0)], vec![explicit(&b.spk, 1, asset())]), &p);
-    let err = connect_block(&ledger, &[cb, tx.clone()], &ctx(), &VerifyCache::new()).unwrap_err();
+    let err = connect_block(&ledger, &[cb, tx.clone()], &ctx()).unwrap_err();
     assert_eq!(err, BlockError::Tx { index: 1, txid: tx.txid(), error: TxError::ImmatureCoinbase(0) });
 }

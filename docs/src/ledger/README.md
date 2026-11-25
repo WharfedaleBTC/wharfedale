@@ -32,10 +32,8 @@ consensus rules and applies them to the UTXO set. Anything not listed as allowed
 
 ```rust
 pub fn check_tx_stateless(tx: &Transaction) -> Result<(), TxError>;
-pub fn check_tx(view: &impl LedgerView, tx: &Transaction, ctx: &ChainCtx,
-                cache: &VerifyCache) -> Result<FeeMap, TxError>;
-pub fn connect_block(view: &impl LedgerView, txs: &[Transaction], ctx: &ChainCtx,
-                     cache: &VerifyCache) -> Result<BlockDiff, BlockError>;
+pub fn check_tx(view: &impl LedgerView, tx: &Transaction, ctx: &ChainCtx) -> Result<FeeMap, TxError>;
+pub fn connect_block(view: &impl LedgerView, txs: &[Transaction], ctx: &ChainCtx) -> Result<BlockDiff, BlockError>;
 ```
 
 `connect_block` is pure: it returns a `BlockDiff` (spent and created UTXOs, fee map), and

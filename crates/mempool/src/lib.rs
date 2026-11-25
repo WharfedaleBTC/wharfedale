@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use elements::{AssetId, OutPoint, Transaction, Txid, Wtxid};
-use wharfedale_ledger::{check_tx, check_tx_stateless, ChainCtx, LedgerView, TxError, VerifyCache};
+use wharfedale_ledger::{check_tx, check_tx_stateless, ChainCtx, LedgerView, TxError};
 
 /// Default minimum fee rate: 10 fee-asset units per 1 000 vbytes (0.01 sat/vB for a
 /// bitcoin-like fee asset; Liquid's is 0.1). Nodes set their own (`min_fee_per_kvb`).
@@ -96,8 +96,8 @@ pub struct Candidate {
 
 /// Full consensus verification of a candidate (signatures, proofs, Simplicity); no pool
 /// state needed, so it runs outside any lock.
-pub fn verify<V: LedgerView>(c: &Candidate, view: &V, ctx: &ChainCtx, cache: &VerifyCache) -> Result<(), TxError> {
-    check_tx(view, &c.tx, ctx, cache).map(|_| ())
+pub fn verify<V: LedgerView>(c: &Candidate, view: &V, ctx: &ChainCtx) -> Result<(), TxError> {
+    check_tx(view, &c.tx, ctx).map(|_| ())
 }
 
 /// Fee rate key: fee per vbyte scaled by 1000, then txid for a total order.
@@ -143,11 +143,10 @@ impl Mempool {
         source: Source,
         view: &V,
         ctx: &ChainCtx,
-        cache: &VerifyCache,
         now: Instant,
     ) -> Result<Txid, AdmitError> {
         let candidate = self.precheck(tx, source, view)?;
-        if let Err(e) = verify(&candidate, view, ctx, cache) {
+        if let Err(e) = verify(&candidate, view, ctx) {
             self.record_failure(candidate.wtxid, &e);
             return Err(e.into());
         }

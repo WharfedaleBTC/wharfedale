@@ -1,12 +1,11 @@
 //! Application state and the `AppMsg` loop. Spec: `docs/src/consensus/app-loop.md`.
 
-use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use elements::confidential::{Asset, Nonce, Value as ConfValue};
 use elements::script::Builder;
-use elements::{AssetId, BlockHash, LockTime, OutPoint, Script, Sequence, Transaction, TxIn, TxOut, TxOutWitness};
+use elements::{AssetId, LockTime, OutPoint, Script, Sequence, Transaction, TxIn, TxOut, TxOutWitness};
 use eyre::{eyre, Result};
 use malachitebft_app_channel::app::engine::host::{HeightParams, Next, SyncedValueOutcome};
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamId, StreamMessage};
@@ -75,7 +74,7 @@ pub struct Proposer {
 
 pub struct App {
     pub ctx: WharfedaleContext,
-    /// Store, mempool and verification cache shared with RPC and gossip.
+    /// Store and mempool shared with RPC and gossip.
     pub node: NodeState,
     pub address: Address,
     validator_set: ValidatorSet,
@@ -85,8 +84,6 @@ pub struct App {
     streams: PartStreamsMap,
     height: Height,
     round: Round,
-    /// Dry-run results of proposals, by block hash; applied on `Decided`.
-    validated: HashMap<BlockHash, BlockDiff>,
     /// Complete, signed proposals for a later height, validated when that height starts.
     future: Vec<ProposalParts>,
     /// Publishes the committed tip height.
@@ -123,7 +120,6 @@ impl App {
             streams: PartStreamsMap::new(),
             height: Height::new(1),
             round: Round::Nil,
-            validated: HashMap::new(),
             future: Vec::new(),
             tip,
             create_empty_blocks,
@@ -154,7 +150,7 @@ impl App {
     /// Mempool template, validated, behind a coinbase when it pays fees. `None` when nothing
     /// in the mempool can go in (unless `create_empty_blocks`): we never build an empty block.
     /// Transactions that no longer validate are dropped from the template and the mempool.
-    fn assemble(&self, h: u64, ctx: &ChainCtx, fee_script: &Script) -> Result<Option<(Vec<Transaction>, BlockDiff)>> {
+    fn assemble(&self, h: u64, ctx: &ChainCtx, fee_script: &Script) -> Result<Option<Vec<Transaction>>> {
         let max = MAX_BLOCK_WEIGHT - COINBASE_WEIGHT_RESERVE;
         let mut candidates: Vec<Transaction> =
             self.node.pool().template(max).iter().map(|t| (**t).clone()).collect();
@@ -162,7 +158,7 @@ impl App {
             if candidates.is_empty() && !self.create_empty_blocks {
                 return Ok(None);
             }
-            match connect_block(&*self.node.store, &candidates, ctx, &self.node.cache) {
+            match connect_block(&*self.node.store, &candidates, ctx) {
                 Ok(diff) => break diff.fees,
                 Err(BlockError::Tx { index, txid, error }) => {
                     warn!(height = h, %txid, "dropping transaction from template: {error}");
@@ -179,8 +175,8 @@ impl App {
             txs.push(coinbase(h, claim, self.node.fee_asset, fee_script));
         }
         txs.extend(candidates);
-        let diff = connect_block(&*self.node.store, &txs, ctx, &self.node.cache)?;
-        Ok(Some((txs, diff)))
+        connect_block(&*self.node.store, &txs, ctx)?;
+        Ok(Some(txs))
     }
 
     /// Whether the next height should start: the mempool has work, a peer already proposed
@@ -251,7 +247,7 @@ impl App {
 
         let parent = self.store().header(h - 1)?.ok_or_else(|| eyre!("missing parent header {}", h - 1))?;
         let ctx = self.chain_ctx(h)?;
-        let Some((txs, diff)) = self.assemble(h, &ctx, &proposer.fee_script)? else {
+        let Some(txs) = self.assemble(h, &ctx, &proposer.fee_script)? else {
             return Ok(None);
         };
         let header = Header {
@@ -278,7 +274,6 @@ impl App {
         self.store().put_undecided(h, r, &hash, &records::encode_proposal(&pv, &block))?;
         self.store().put_parts(h, &hash, &records::encode_parts(&parts)?)?;
         self.store().put_built(h, r, &hash)?;
-        self.validated.insert(hash, diff);
         info!(height = h, round = r, %hash, txs = block.txs.len(), "built block");
         Ok(Some((block, parts)))
     }
@@ -329,8 +324,8 @@ impl App {
 
     /// Full block validation on top of the committed tip (the caller checked the structure:
     /// `roots_match`). `now`: local time for a proposal, `None` for a decided (synced) block.
-    /// Caches the diff on success.
-    fn validate_block(&mut self, block: &Block, proposer: Address, now: Option<u64>) -> Result<()> {
+    /// Returns the state change; nothing is kept, so a valid block is checked again each time.
+    fn validate_block(&mut self, block: &Block, proposer: Address, now: Option<u64>) -> Result<BlockDiff> {
         let h = block.height();
         let (tip, _) = self.store().tip()?;
         if h != tip + 1 {
@@ -338,9 +333,7 @@ impl App {
         }
         let parent = self.store().header(tip)?.ok_or_else(|| eyre!("missing tip header"))?;
         check_header(&block.header, &parent, &proposer.into_inner(), now, MAX_TIME_DRIFT)?;
-        let diff = connect_block(&*self.node.store, &block.txs, &self.chain_ctx(h)?, &self.node.cache)?;
-        self.validated.insert(block.hash(), diff);
-        Ok(())
+        Ok(connect_block(&*self.node.store, &block.txs, &self.chain_ctx(h)?)?)
     }
 
     /// Validates complete parts for the current height and records them as undecided.
@@ -353,13 +346,14 @@ impl App {
             }
         };
         let (h, r, hash) = (parts.height.as_u64(), round_u32(parts.round), block.hash());
-        // A block is validated once per height: its outcome depends only on the parent.
+        // Only bad verdicts are remembered: a block already found invalid at this height stays
+        // invalid (its outcome depends only on the parent); a valid one is checked again.
         let known = self.store().undecided_by_hash(h, &hash)?.and_then(|rec| records::decode_proposal(&rec).ok());
         let validity = match known {
-            Some((pv, _)) if pv.round == parts.round => return Ok(Some(pv)),
-            Some((pv, _)) => pv.validity,
-            None => match self.validate_block(&block, parts.proposer, Some(unix_now())) {
-                Ok(()) => Validity::Valid,
+            Some((pv, _)) if pv.validity == Validity::Invalid && pv.round == parts.round => return Ok(Some(pv)),
+            Some((pv, _)) if pv.validity == Validity::Invalid => Validity::Invalid,
+            _ => match self.validate_block(&block, parts.proposer, Some(unix_now())) {
+                Ok(_) => Validity::Valid,
                 Err(e) => {
                     warn!(height = %parts.height, round = %parts.round, "invalid proposal: {e}");
                     Validity::Invalid
@@ -405,12 +399,9 @@ impl App {
             .undecided_by_hash(h, &hash)?
             .ok_or_else(|| eyre!("decided block {hash} at {h} is unknown"))?;
         let (_, block) = records::decode_proposal(&record)?;
-        let diff = match self.validated.remove(&hash) {
-            Some(diff) => diff,
-            None => connect_block(&*self.node.store, &block.txs, &self.chain_ctx(h)?, &self.node.cache)?,
-        };
+        // Validated again here: no result of an earlier check is reused.
+        let diff = connect_block(&*self.node.store, &block.txs, &self.chain_ctx(h)?)?;
         self.store().commit(&block, &cert_bytes, &diff)?;
-        self.validated.clear();
         {
             let mut pool = self.node.pool();
             pool.remove_for_block(&block.txs);
@@ -658,7 +649,7 @@ async fn handle(
                         } else {
                             app.synced = Some(height);
                             let validity = match app.validate_block(&block, proposer, None) {
-                                Ok(()) => Validity::Valid,
+                                Ok(_) => Validity::Valid,
                                 Err(e) => {
                                     warn!(%height, "invalid synced block: {e}");
                                     Validity::Invalid

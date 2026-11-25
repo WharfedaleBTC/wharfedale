@@ -31,7 +31,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
-use wharfedale_ledger::VerifyCache;
 use wharfedale_mempool::{Mempool, Policy};
 use wharfedale_rpc::{NetworkInfo, NetworkInfoFn, NodeRole, NodeState, PeerInfo};
 use wharfedale_store::Store;
@@ -211,7 +210,6 @@ pub async fn start(home: &Path) -> Result<NodeHandle> {
         genesis_hash: store.genesis_hash()?,
         store: Arc::new(store),
         mempool: Arc::new(Mutex::new(Mempool::new(Policy { min_fee_per_kvb: config.min_fee_per_kvb, ..Policy::new(fee_asset) }))),
-        cache: Arc::new(VerifyCache::new()),
         chain_id: genesis.chain_id.clone(),
         fee_asset,
         coinbase_maturity: app::COINBASE_MATURITY,

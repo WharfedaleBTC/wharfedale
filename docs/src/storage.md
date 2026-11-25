@@ -69,7 +69,7 @@ A script appears in `spk_history` for every transaction that pays it or spends f
 ## Commit (`Store::commit`, on `Decided`)
 
 ```text
-diff = cache[block_hash] or ledger::connect_block(store, block)      (node)
+diff = ledger::connect_block(store, block)      (node; validated again at commit)
 require block.height == tip_height + 1 and block.prev == tip_hash   (else NotNext)
 write txn:
   headers, bodies, block_index, certs  ← put

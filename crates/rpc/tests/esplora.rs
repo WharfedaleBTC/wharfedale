@@ -11,7 +11,7 @@ use elements::script::Builder;
 use elements::{opcodes, AssetIssuance, OutPoint, Script, Transaction, TxIn, TxOut, TxOutWitness, Txid};
 use serde_json::{json, Value};
 use wharfedale_chain::{merkle, Block, Genesis, GenesisValidator, Header};
-use wharfedale_ledger::{BlockDiff, VerifyCache};
+use wharfedale_ledger::{BlockDiff};
 use wharfedale_mempool::{Mempool, Policy};
 use wharfedale_rpc::{NetworkInfo, NetworkInfoFn, NodeRole, NodeState, PeerInfo};
 use wharfedale_store::Store;
@@ -75,7 +75,6 @@ fn state(store: Arc<Store>, network_info: Option<NetworkInfoFn>) -> NodeState {
         genesis_hash: store.genesis_hash().unwrap(),
         store,
         mempool: Arc::new(Mutex::new(Mempool::new(Policy::new(fee_asset)))),
-        cache: Arc::new(VerifyCache::new()),
         chain_id: CHAIN.into(),
         fee_asset,
         coinbase_maturity: 100,

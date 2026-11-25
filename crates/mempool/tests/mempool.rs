@@ -10,7 +10,7 @@ use elements::{
     AssetId, BlockHash, LockTime, OutPoint, SchnorrSighashType, Script, Sequence, Transaction, TxIn, TxOut, TxOutWitness,
     Txid, Witness,
 };
-use wharfedale_ledger::{ChainCtx, LedgerView, MemoryLedger, UtxoEntry, VerifyCache};
+use wharfedale_ledger::{ChainCtx, LedgerView, MemoryLedger, UtxoEntry};
 use wharfedale_mempool::{wire, AdmitError, Mempool, Policy, Source};
 
 fn asset() -> AssetId {
@@ -69,7 +69,7 @@ fn setup(key: &Key, n: u8) -> MemoryLedger {
 }
 
 fn admit(pool: &mut Mempool, l: &MemoryLedger, tx: Transaction) -> Result<Txid, AdmitError> {
-    pool.admit(tx, Source::Local, l, &ctx(), &VerifyCache::new(), Instant::now())
+    pool.admit(tx, Source::Local, l, &ctx(), Instant::now())
 }
 
 #[test]
@@ -167,11 +167,10 @@ fn split_admission_rechecks_conflicts_on_insert() {
     let (a, b, c) = (Key::new(1), Key::new(2), Key::new(3));
     let l = setup(&a, 1);
     let mut pool = Mempool::new(Policy::new(asset()));
-    let cache = VerifyCache::new();
     let first = pool.precheck(a.spend(&l, &[op(1)], &b.1, 1_000), Source::Local, &l).unwrap();
     let second = pool.precheck(a.spend(&l, &[op(1)], &c.1, 2_000), Source::Local, &l).unwrap();
-    wharfedale_mempool::verify(&first, &l, &ctx(), &cache).unwrap();
-    wharfedale_mempool::verify(&second, &l, &ctx(), &cache).unwrap();
+    wharfedale_mempool::verify(&first, &l, &ctx()).unwrap();
+    wharfedale_mempool::verify(&second, &l, &ctx()).unwrap();
     let txid = pool.insert(first, &l, Instant::now()).unwrap();
     assert_eq!(pool.insert(second, &l, Instant::now()), Err(AdmitError::Conflict(0, txid)));
     assert_eq!(pool.len(), 1);
