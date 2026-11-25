@@ -7,9 +7,8 @@
 #
 # The workspace builds against sibling checkouts, laid out as locally:
 #   malachite/          WharfedaleBTC/malachite at MALACHITE_REF (the fork)
-#   wharfedale-sdk-rs/  WharfedaleBTC/wharfedale-sdk-rs at SDK_RS_REF. While that repository is
-#                       private, add a secret SDK_RS_TOKEN: a fine-grained token with read access
-#                       to its contents. Once it is public the default token is enough.
+#   wharfedale-sdk-rs/  WharfedaleBTC/wharfedale-sdk-rs at SDK_RS_REF
+# Both are public: no token needed.
 name: ci
 
 on:
@@ -40,12 +39,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { repository: WharfedaleBTC/malachite, ref: "${{ env.MALACHITE_REF }}", path: malachite, persist-credentials: false }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: WharfedaleBTC/wharfedale-sdk-rs
-          ref: ${{ env.SDK_RS_REF }}
-          path: wharfedale-sdk-rs
-          token: ${{ secrets.SDK_RS_TOKEN || github.token }}
-          persist-credentials: false
+        with: { repository: WharfedaleBTC/wharfedale-sdk-rs, ref: "${{ env.SDK_RS_REF }}", path: wharfedale-sdk-rs, persist-credentials: false }
 
       - name: Rust toolchain
         run: rustup toolchain install stable --profile minimal --component clippy && rustup default stable
@@ -86,12 +80,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { repository: WharfedaleBTC/malachite, ref: "${{ env.MALACHITE_REF }}", path: malachite, persist-credentials: false }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: WharfedaleBTC/wharfedale-sdk-rs
-          ref: ${{ env.SDK_RS_REF }}
-          path: wharfedale-sdk-rs
-          token: ${{ secrets.SDK_RS_TOKEN || github.token }}
-          persist-credentials: false
+        with: { repository: WharfedaleBTC/wharfedale-sdk-rs, ref: "${{ env.SDK_RS_REF }}", path: wharfedale-sdk-rs, persist-credentials: false }
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0

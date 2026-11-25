@@ -27,9 +27,8 @@ A change that spans repositories lands in the dependency first (fork, then SDK),
 
 ## Repository settings
 
-- `wharfedale-sdk-rs` is private: add a secret `SDK_RS_TOKEN` to `wharfedale` (a fine-grained
-  token with read access to that repository's contents). Without it, and while it stays
-  private, the node workflow cannot check it out. Once it is public, no secret is needed.
+- No secrets: the repositories CI checks out are public, and publishing uses the workflow's own
+  token.
 - The first push creates the packages on GHCR, private by default. To pull without a login
   (as `demo-prod` does), set each package's visibility to public: the organization's
   Packages → the package → Package settings.
