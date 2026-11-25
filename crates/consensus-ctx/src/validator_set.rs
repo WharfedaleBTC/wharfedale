@@ -52,7 +52,7 @@ impl malachitebft_core_types::Validator<WharfedaleContext> for Validator {
     }
 }
 
-/// A validator set contains a list of validators sorted by address.
+/// A validator set: the genesis validators, in genesis order (which sets the proposer rotation).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ValidatorSet {
     pub validators: Arc<Vec<Validator>>,

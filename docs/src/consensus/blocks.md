@@ -60,8 +60,9 @@ enum ProposalPart {
 - Stream id = height (u64 BE) ‖ round (u32 BE); messages are `Data(part)` with sequence 0..n,
   then `Fin`. Published with `NetworkMsg::PublishProposalPart`.
 - Reassembly groups by publisher and stream id (`node::streaming`, from Malachite `test/streaming`).
-  At most 64 streams are assembled at once (oldest dropped) and sequence numbers above 80 are
-  ignored (a maximal 4 MB block is ~67 messages).
+  At most 64 streams are assembled at once (oldest dropped); sequence numbers above 80 and
+  `Data` chunks above 64 KiB are ignored (a maximal 4 MB block is ~67 messages), so a stream
+  buffers at most ~5 MB whatever the gossip message limit.
 - A receiver checks: proposer = the selected proposer for (height, round); `Init` matches the
   stream; the signature; the block decodes, has that height and `roots_match`. A failure here
   means a forged or broken stream: the parts are ignored. Then [full validation](app-loop.md).

@@ -340,8 +340,12 @@ impl Codec<sync::Status<WharfedaleContext>> for ProtobufCodec {
             .peer_id
             .ok_or_else(|| ProtoError::missing_field::<proto::Status>("peer_id"))?;
 
+        // Peer-supplied bytes: a malformed id is a decode error, never a panic.
+        let peer_id = PeerId::from_bytes(proto_peer_id.id.as_ref())
+            .map_err(|e| ProtoError::Other(format!("invalid peer id in status: {e}")))?;
+
         Ok(sync::Status {
-            peer_id: PeerId::from_bytes(proto_peer_id.id.as_ref()).unwrap(),
+            peer_id,
             tip_height: Height::new(proto.height),
             history_min_height: Height::new(proto.earliest_height),
         })
@@ -692,3 +696,22 @@ impl Codec<ValidatorProof<WharfedaleContext>> for ProtobufCodec {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_with_malformed_peer_id_is_an_error_not_a_panic() {
+        let bytes = Bytes::from(
+            proto::Status {
+                peer_id: Some(proto::PeerId { id: Bytes::from_static(b"not a peer id") }),
+                height: 7,
+                earliest_height: 1,
+            }
+            .encode_to_vec(),
+        );
+        let decoded: Result<sync::Status<WharfedaleContext>, _> = ProtobufCodec.decode(bytes);
+        assert!(decoded.is_err());
+    }
+}

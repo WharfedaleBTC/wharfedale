@@ -28,15 +28,13 @@ use wharfedale_consensus_ctx::{
     ValidatorSet, Value, WharfedaleContext,
 };
 use wharfedale_ledger::consts::MAX_BLOCK_WEIGHT;
-use wharfedale_ledger::{connect_block, BlockDiff, BlockError, ChainCtx};
+use wharfedale_ledger::{connect_block, BlockDiff, BlockError, ChainCtx, TxError};
 use wharfedale_rpc::NodeState;
 use wharfedale_store::Store;
 
 use crate::records;
-use crate::streaming::{PartStreamsMap, ProposalParts};
+use crate::streaming::{PartStreamsMap, ProposalParts, CHUNK_SIZE};
 
-/// Largest block slice carried by one proposal part.
-pub const CHUNK_SIZE: usize = 64 * 1024;
 /// Maximum seconds a proposal timestamp may be ahead of local time.
 pub const MAX_TIME_DRIFT: u64 = 10;
 /// Coinbase outputs wait this many blocks.
@@ -48,6 +46,9 @@ pub const COINBASE_WEIGHT_RESERVE: usize = 4_000;
 pub const MAX_FUTURE_PROPOSALS: usize = 16;
 /// How often a node holding the next height checks its mempool again.
 pub const IDLE_CHECK: Duration = Duration::from_millis(100);
+
+/// Outcome of validating a block: its state change, or why it is invalid.
+type Verdict = std::result::Result<BlockDiff, String>;
 
 /// A height consensus is waiting for the application to start, held while there is nothing to
 /// put in a block.
@@ -163,7 +164,10 @@ impl App {
                 Err(BlockError::Tx { index, txid, error }) => {
                     warn!(height = h, %txid, "dropping transaction from template: {error}");
                     candidates.remove(index);
-                    self.node.pool().remove(&txid);
+                    // A local evaluation fault says nothing about the transaction: keep it.
+                    if !matches!(error, TxError::SimplicityNodeFault(..)) {
+                        self.node.pool().remove(&txid);
+                    }
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -325,15 +329,27 @@ impl App {
     /// Full block validation on top of the committed tip (the caller checked the structure:
     /// `roots_match`). `now`: local time for a proposal, `None` for a decided (synced) block.
     /// Returns the state change; nothing is kept, so a valid block is checked again each time.
-    fn validate_block(&mut self, block: &Block, proposer: Address, now: Option<u64>) -> Result<BlockDiff> {
+    ///
+    /// The outer error is a local fault (storage, not at that height, a Simplicity evaluation
+    /// fault): it says nothing about the block and must not be remembered as a verdict. The
+    /// inner error is the reason the block is invalid.
+    fn validate_block(&self, block: &Block, proposer: Address, now: Option<u64>) -> Result<Verdict> {
         let h = block.height();
         let (tip, _) = self.store().tip()?;
         if h != tip + 1 {
             return Err(eyre!("block {h} does not extend tip {tip}"));
         }
         let parent = self.store().header(tip)?.ok_or_else(|| eyre!("missing tip header"))?;
-        check_header(&block.header, &parent, &proposer.into_inner(), now, MAX_TIME_DRIFT)?;
-        Ok(connect_block(&*self.node.store, &block.txs, &self.chain_ctx(h)?)?)
+        if let Err(e) = check_header(&block.header, &parent, &proposer.into_inner(), now, MAX_TIME_DRIFT) {
+            return Ok(Err(e.to_string()));
+        }
+        match connect_block(&*self.node.store, &block.txs, &self.chain_ctx(h)?) {
+            Ok(diff) => Ok(Ok(diff)),
+            Err(BlockError::Tx { error: error @ TxError::SimplicityNodeFault(..), .. }) => {
+                Err(eyre!("could not evaluate the block: {error}"))
+            }
+            Err(e) => Ok(Err(e.to_string())),
+        }
     }
 
     /// Validates complete parts for the current height and records them as undecided.
@@ -353,10 +369,16 @@ impl App {
             Some((pv, _)) if pv.validity == Validity::Invalid && pv.round == parts.round => return Ok(Some(pv)),
             Some((pv, _)) if pv.validity == Validity::Invalid => Validity::Invalid,
             _ => match self.validate_block(&block, parts.proposer, Some(unix_now())) {
-                Ok(_) => Validity::Valid,
-                Err(e) => {
-                    warn!(height = %parts.height, round = %parts.round, "invalid proposal: {e}");
+                Ok(Ok(_)) => Validity::Valid,
+                Ok(Err(reason)) => {
+                    warn!(height = %parts.height, round = %parts.round, "invalid proposal: {reason}");
                     Validity::Invalid
+                }
+                // Nothing is stored or answered: consensus times out on the proposal (this node
+                // prevotes nil) and the block is checked afresh if it comes again.
+                Err(e) => {
+                    warn!(height = %parts.height, round = %parts.round, "could not validate proposal: {e:#}");
+                    return Ok(None);
                 }
             },
         };
@@ -517,6 +539,10 @@ async fn handle(
             AppMsg::ConsensusReady { reply } => {
                 let (tip, _) = app.node.store.tip()?;
                 let start = Height::new(tip + 1);
+                // Until `start` begins, the committed tip is the current height: parts for
+                // `start` are buffered as next-height proposals (they wake a held height),
+                // not validated against a height this node is not at.
+                app.height = Height::new(tip);
                 // The network layer types peers (validator or full) by the validator set, which
                 // it otherwise learns only when a height starts: give it now, in case we hold.
                 channels.network.send(NetworkMsg::UpdateValidatorSet(app.validator_set.clone())).await?;
@@ -567,7 +593,8 @@ async fn handle(
             AppMsg::ReceivedProposalPart { from, published_by, part, reply } => {
                 let value = match app.streams.insert(from, published_by, part) {
                     None => None,
-                    Some(parts) if parts.height < app.height => None,
+                    // Past heights, and height 0 (genesis is never proposed).
+                    Some(parts) if parts.height < app.height || parts.height.as_u64() == 0 => None,
                     // Next height only, signed by its proposer, bounded.
                     Some(parts) if parts.height > app.height => {
                         if parts.height == app.height.increment() && app.future.len() < MAX_FUTURE_PROPOSALS {
@@ -648,23 +675,36 @@ async fn handle(
                             SyncedValueOutcome::LocalTransientError
                         } else {
                             app.synced = Some(height);
-                            let validity = match app.validate_block(&block, proposer, None) {
-                                Ok(_) => Validity::Valid,
+                            match app.validate_block(&block, proposer, None) {
                                 Err(e) => {
-                                    warn!(%height, "invalid synced block: {e}");
-                                    Validity::Invalid
+                                    warn!(%height, "could not validate synced block: {e:#}");
+                                    SyncedValueOutcome::LocalTransientError
                                 }
-                            };
-                            let pv = ProposedValue {
-                                height,
-                                round,
-                                valid_round: Round::Nil,
-                                proposer,
-                                value: Value::new(block.hash()),
-                                validity,
-                            };
-                            app.node.store.put_undecided(height.as_u64(), round_u32(round), &block.hash(), &records::encode_proposal(&pv, &block))?;
-                            SyncedValueOutcome::Verdict(pv)
+                                Ok(verdict) => {
+                                    let validity = match verdict {
+                                        Ok(_) => Validity::Valid,
+                                        Err(reason) => {
+                                            warn!(%height, "invalid synced block: {reason}");
+                                            Validity::Invalid
+                                        }
+                                    };
+                                    let pv = ProposedValue {
+                                        height,
+                                        round,
+                                        valid_round: Round::Nil,
+                                        proposer,
+                                        value: Value::new(block.hash()),
+                                        validity,
+                                    };
+                                    app.node.store.put_undecided(
+                                        height.as_u64(),
+                                        round_u32(round),
+                                        &block.hash(),
+                                        &records::encode_proposal(&pv, &block),
+                                    )?;
+                                    SyncedValueOutcome::Verdict(pv)
+                                }
+                            }
                         }
                     }
                 };

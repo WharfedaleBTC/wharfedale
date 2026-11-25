@@ -41,6 +41,8 @@ pub enum GenesisError {
     PublicKey(usize),
     #[error("validator {0}: voting power must be positive")]
     VotingPower(usize),
+    #[error("validator {0}: public key listed twice")]
+    DuplicateValidator(usize),
     #[error("no validators")]
     NoValidators,
     #[error("initial transaction {0} is not valid hex-encoded Elements")]
@@ -71,6 +73,7 @@ impl Genesis {
         if self.validators.is_empty() {
             return Err(GenesisError::NoValidators);
         }
+        let mut seen = std::collections::HashSet::with_capacity(self.validators.len());
         self.validators
             .iter()
             .enumerate()
@@ -81,6 +84,11 @@ impl Genesis {
                     .ok_or(GenesisError::PublicKey(i))?;
                 if v.voting_power == 0 {
                     return Err(GenesisError::VotingPower(i));
+                }
+                // A repeated key would count its power twice in the total but once in votes
+                // (looked up by address): quorums could become unreachable.
+                if !seen.insert(key) {
+                    return Err(GenesisError::DuplicateValidator(i));
                 }
                 Ok((key, v.voting_power))
             })

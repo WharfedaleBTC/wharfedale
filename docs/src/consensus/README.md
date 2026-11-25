@@ -8,7 +8,7 @@ Malachite (Tendermint BFT, Rust) decides one block per height over the fixed gen
 | Finality | Instant: a block with commit signatures from > 2/3 voting power is final |
 | Fault tolerance | f Byzantine of 3f + 1 voting power; halts if > 1/3 is offline |
 | Validator set | `genesis.validators`, returned unchanged in every `HeightParams` |
-| Proposer selection | Round-robin over the set sorted by address: index `(height − 1 + round) mod n` |
+| Proposer selection | Round-robin over the set in genesis order: index `(height − 1 + round) mod n` |
 | Signing | Ed25519 (`arc-malachitebft-signing-ed25519`) |
 | Value | `Value(ValueId)` = block hash; the full block travels as signed proposal parts |
 | Rewards | None. A coinbase, present only when the block pays fees, claims at most them |

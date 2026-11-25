@@ -9,12 +9,14 @@ use crate::{Address, Ed25519, Height, Proposal, ProposalPart, Validator, Validat
 pub struct WharfedaleContext;
 
 impl WharfedaleContext {
-    /// Round-robin over the validator set (sorted by address): `(height - 1 + round) mod n`.
+    /// Round-robin over the validator set in genesis order: `(height - 1 + round) mod n`.
+    /// Never overflows: heights and rounds can come from peers.
     pub fn proposer(validator_set: &ValidatorSet, height: Height, round: Round) -> &Validator {
         assert!(validator_set.count() > 0);
         assert!(round != Round::Nil && round.as_i64() >= 0);
-        let index = (height.as_u64() as usize - 1 + round.as_i64() as usize) % validator_set.count();
-        validator_set.get_by_index(index).expect("index < count")
+        let n = validator_set.count() as u64;
+        let index = (height.as_u64().saturating_sub(1) % n + round.as_i64() as u64 % n) % n;
+        validator_set.get_by_index(index as usize).expect("index < count")
     }
 }
 
@@ -45,5 +47,28 @@ impl Context for WharfedaleContext {
 
     fn new_precommit(&self, height: Height, round: Round, value_id: NilOrVal<ValueId>, address: Address) -> Vote {
         Vote::new_precommit(height, round, value_id, address)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    use super::*;
+    use crate::PrivateKey;
+
+    #[test]
+    fn proposer_rotates_in_genesis_order_and_never_overflows() {
+        let mut rng = StdRng::seed_from_u64(1);
+        let set = ValidatorSet::new((0..3).map(|_| Validator::new(PrivateKey::generate(&mut rng).public_key(), 1)));
+        let at = |h: u64, r: u32| WharfedaleContext::proposer(&set, Height::new(h), Round::new(r)).address;
+        assert_eq!(at(1, 0), set.validators[0].address);
+        assert_eq!(at(2, 0), set.validators[1].address);
+        assert_eq!(at(1, 2), set.validators[2].address);
+        assert_eq!(at(3, 1), set.validators[0].address);
+        // Height 0 and extreme values (peer-supplied) don't panic.
+        at(0, 0);
+        at(u64::MAX, u32::MAX);
     }
 }

@@ -178,7 +178,7 @@ impl Mempool {
         }
         let vsize = tx.weight().div_ceil(4);
         let fee = fees.get(&self.policy.fee_asset).copied().unwrap_or(0);
-        let min = (self.policy.min_fee_per_kvb * vsize as u64).div_ceil(1000);
+        let min = self.policy.min_fee_per_kvb.saturating_mul(vsize as u64).div_ceil(1000);
         if fee < min {
             return Err(AdmitError::FeeTooLow { fee, min, vsize });
         }
@@ -375,7 +375,8 @@ pub mod wire {
             Some(s)
         };
         let count = u32::from_le_bytes(take(4)?.try_into().ok()?) as usize;
-        let mut txs = Vec::with_capacity(count.min(10_000));
+        // Peer-supplied count: each transaction takes at least its 4-byte length.
+        let mut txs = Vec::with_capacity(count.min(bytes.len() / 4));
         for _ in 0..count {
             let len = u32::from_le_bytes(take(4)?.try_into().ok()?) as usize;
             txs.push(encode::deserialize(take(len)?).ok()?);

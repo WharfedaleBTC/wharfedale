@@ -108,3 +108,25 @@ fn duplicated_transactions_do_not_match_the_header() {
     assert_eq!(mutated.hash(), honest.hash());
     assert!(!mutated.roots_match());
 }
+
+#[test]
+fn decode_tx_at_returns_one_transaction() {
+    let g = genesis("a").block().unwrap();
+    let variant = |n: u32| {
+        elements::Transaction { version: 2, lock_time: elements::LockTime::from_consensus(n), input: vec![], output: vec![] }
+    };
+    let block = Block { header: g.header, txs: vec![variant(1), variant(2), variant(3)] };
+    let bytes = block.encode();
+    for (i, tx) in block.txs.iter().enumerate() {
+        assert_eq!(Block::decode_tx_at(&bytes, i).unwrap().as_ref(), Some(tx));
+    }
+    assert_eq!(Block::decode_tx_at(&bytes, 3).unwrap(), None);
+    assert!(Block::decode_tx_at(&bytes[..bytes.len() - 1], 2).is_err(), "truncated");
+}
+
+#[test]
+fn genesis_rejects_a_repeated_validator_key() {
+    let mut g = genesis("a");
+    g.validators.push(g.validators[0].clone());
+    assert!(matches!(g.validator_keys(), Err(wharfedale_chain::GenesisError::DuplicateValidator(1))));
+}

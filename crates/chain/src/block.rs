@@ -39,9 +39,8 @@ impl Block {
     /// The header commits to exactly these transactions: both roots match and the txid tree
     /// is not mutated (no duplicated subtree yielding the same root).
     pub fn roots_match(&self) -> bool {
-        !merkle::tx_tree_mutated(&self.txs)
-            && self.header.tx_merkle_root == merkle::tx_root(&self.txs)
-            && self.header.witness_merkle_root == merkle::witness_root(&self.txs)
+        let (tx_root, mutated) = merkle::root_checked(self.txs.iter().map(|tx| tx.txid().to_byte_array()).collect());
+        !mutated && self.header.tx_merkle_root == tx_root && self.header.witness_merkle_root == merkle::witness_root(&self.txs)
     }
 
     pub fn encode(&self) -> Vec<u8> {
@@ -61,7 +60,8 @@ impl Block {
         let header = Header::decode(header_bytes).ok_or(BlockDecodeError::Header)?;
         let mut pos = HEADER_SIZE;
         let count = read_u32(bytes, &mut pos)? as usize;
-        let mut txs = Vec::with_capacity(count.min(100_000));
+        // Every transaction takes at least its 4-byte length: never reserve more than that.
+        let mut txs = Vec::with_capacity(count.min((bytes.len() - pos) / 4));
         for i in 0..count {
             let len = read_u32(bytes, &mut pos)? as usize;
             let raw = bytes.get(pos..pos + len).ok_or(BlockDecodeError::Truncated)?;
@@ -72,6 +72,24 @@ impl Block {
             return Err(BlockDecodeError::TrailingBytes);
         }
         Ok(Self { header, txs })
+    }
+
+    /// Decodes only the transaction at `position` of an encoded block, skipping the others by
+    /// their length prefixes. `None` past the last transaction. Does not check that the rest
+    /// of the encoding is well formed (use [`Block::decode`] for that).
+    pub fn decode_tx_at(bytes: &[u8], position: usize) -> Result<Option<Transaction>, BlockDecodeError> {
+        let mut pos = HEADER_SIZE;
+        let count = read_u32(bytes, &mut pos)? as usize;
+        if position >= count {
+            return Ok(None);
+        }
+        for _ in 0..position {
+            let len = read_u32(bytes, &mut pos)? as usize;
+            pos += len;
+        }
+        let len = read_u32(bytes, &mut pos)? as usize;
+        let raw = bytes.get(pos..pos + len).ok_or(BlockDecodeError::Truncated)?;
+        encode::deserialize(raw).map(Some).map_err(|_| BlockDecodeError::Transaction(position))
     }
 }
 

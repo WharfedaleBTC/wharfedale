@@ -4,6 +4,7 @@
 //! `scripthash` = SHA-256(scriptPubKey), hex, not reversed.
 
 use std::str::FromStr;
+use std::sync::Arc;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -106,7 +107,12 @@ fn find_tx(st: &NodeState, txid: &Txid) -> ApiResult<Option<(Transaction, Option
     Ok(st.store.transaction(txid).map_err(internal)?.map(|(tx, h)| (tx, Some(h))))
 }
 
+/// The output `op` spends: from the UTXO set when unspent (one lookup; every mempool input is
+/// a confirmed UTXO), else from its transaction.
 fn prevout(st: &NodeState, op: &OutPoint) -> ApiResult<Option<TxOut>> {
+    if let Some(entry) = st.store.utxo_entry(op).map_err(internal)? {
+        return Ok(Some(entry.txout));
+    }
     Ok(find_tx(st, &op.txid)?.and_then(|(tx, _)| tx.output.into_iter().nth(op.vout as usize)))
 }
 
@@ -238,10 +244,11 @@ fn block_by_hash(st: &NodeState, hash: &str) -> ApiResult<Block> {
 }
 
 /// Mempool transactions paying to or spending from `script`.
-fn mempool_touching(st: &NodeState, script: &[u8; 32]) -> ApiResult<Vec<Transaction>> {
-    let txs: Vec<Transaction> = {
+fn mempool_touching(st: &NodeState, script: &[u8; 32]) -> ApiResult<Vec<Arc<Transaction>>> {
+    // Shared handles, not copies: the pool can hold hundreds of megabytes.
+    let txs: Vec<Arc<Transaction>> = {
         let pool = st.pool();
-        pool.txids().iter().filter_map(|t| pool.get(t).map(|e| (*e.tx).clone())).collect()
+        pool.txids().iter().filter_map(|t| pool.get(t).map(|e| e.tx.clone())).collect()
     };
     let mut out = Vec::new();
     for tx in txs {

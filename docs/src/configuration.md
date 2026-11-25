@@ -17,6 +17,8 @@ or votes).
 <home>/data/wal/consensus.wal  Malachite write-ahead log
 ```
 
+Key files are written with mode 0600 (owner only).
+
 ## `genesis.json` (consensus-critical, identical on every node)
 
 ```json
@@ -35,7 +37,7 @@ or votes).
 |---|---|
 | `chain_id` | Network name; part of the genesis hash |
 | `genesis_time` | Unix seconds; genesis header timestamp |
-| `validators` | The complete, permanent validator set. Address = first 20 bytes of Keccak-256(public key); Malachite sorts the set by address |
+| `validators` | The complete, permanent validator set. Address = first 20 bytes of Keccak-256(public key). The set keeps genesis order, which sets the proposer rotation; each key may appear once |
 | `fee_asset` | Asset counted by mempool fee policy. Tooling sets `fee_asset_for(chain_id)` = Elements issuance id from outpoint `00…00:0` with contract hash SHA-256(chain_id); part of the genesis hash |
 | `initial_txs` | Elements transactions applied without validation; their taproot outputs become UTXOs at height 0. Tooling: one `genesis_funding_tx` paying the faucet 20 × 10¹² of the fee asset |
 

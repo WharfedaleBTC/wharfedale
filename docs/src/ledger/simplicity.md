@@ -23,7 +23,7 @@ cost analysis against the budget, then execute.
 
 **Error mapping** (as Elements `CheckSimplicity`): `NO_ERROR` → valid. `MALLOC`,
 `NOT_YET_IMPLEMENTED`, or the call returning `false` → `SimplicityNodeFault`: a local failure,
-not remembered as invalid; a proposal hitting it gets a nil prevote from this node. Every other code (e.g.
+not remembered as invalid; a proposal or synced block hitting it gets no verdict (the node prevotes nil after the proposal timeout; sync retries), and the mempool keeps such a transaction. Every other code (e.g.
 `CMR`, `EXEC_JET`, `EXEC_BUDGET`) → `SimplicityRejected`: the input is invalid.
 
 Results are not cached: every check executes the program again.

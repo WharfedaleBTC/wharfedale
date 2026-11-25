@@ -252,10 +252,16 @@ impl Store {
     /// A committed transaction and the height of its block.
     pub fn transaction(&self, txid: &Txid) -> Result<Option<(Transaction, u64)>> {
         let Some(loc) = self.get_raw(TX_INDEX, &txid.to_byte_array())? else { return Ok(None) };
-        let height = u64::from_le_bytes(loc[..8].try_into().map_err(|_| StoreError::Corrupt("tx_index"))?);
-        let pos = u32::from_le_bytes(loc[8..12].try_into().map_err(|_| StoreError::Corrupt("tx_index"))?) as usize;
-        let block = self.block(height)?.ok_or(StoreError::Corrupt("tx_index points to missing block"))?;
-        let tx = block.txs.into_iter().nth(pos).ok_or(StoreError::Corrupt("tx_index position"))?;
+        let height = u64::from_le_bytes(loc.get(..8).and_then(|b| b.try_into().ok()).ok_or(StoreError::Corrupt("tx_index"))?);
+        let pos = u32::from_le_bytes(loc.get(8..12).and_then(|b| b.try_into().ok()).ok_or(StoreError::Corrupt("tx_index"))?) as usize;
+        // Decode just this transaction, in place: RPC and the indexer call this per input, and
+        // a block can be megabytes.
+        let txn = self.db.begin_read().map_err(dberr)?;
+        let bodies = txn.open_table(BODIES).map_err(dberr)?;
+        let body = bodies.get(height).map_err(dberr)?.ok_or(StoreError::Corrupt("tx_index points to missing block"))?;
+        let tx = Block::decode_tx_at(body.value(), pos)
+            .map_err(|_| StoreError::Corrupt("block"))?
+            .ok_or(StoreError::Corrupt("tx_index position"))?;
         Ok(Some((tx, height)))
     }
 

@@ -118,7 +118,9 @@ impl ProposalParts {
 
 /// Streams assembled at once; the oldest is dropped beyond this (any peer can open streams).
 pub const MAX_STREAMS: usize = 64;
-/// Highest sequence number accepted: a maximal block (4 MB) is ~67 messages of 64 KiB.
+/// Largest block slice carried by one proposal part (`Data`).
+pub const CHUNK_SIZE: usize = 64 * 1024;
+/// Highest sequence number accepted: a maximal block (4 MB) is ~67 messages of `CHUNK_SIZE`.
 pub const MAX_SEQUENCE: u64 = 80;
 
 #[derive(Default)]
@@ -151,6 +153,12 @@ impl PartStreamsMap {
         if msg.sequence > MAX_SEQUENCE {
             return None;
         }
+        // Proposers slice blocks into `CHUNK_SIZE` parts; a larger one is never valid. Without
+        // this bound a peer could make each of the `MAX_STREAMS` streams buffer
+        // `MAX_SEQUENCE` gossip-sized (MiB) messages.
+        if msg.content.as_data().and_then(ProposalPart::as_data).is_some_and(|d| d.chunk.len() > CHUNK_SIZE) {
+            return None;
+        }
         let key = (publisher, stream_id.clone());
         if !self.streams.contains_key(&key) {
             while self.streams.len() >= MAX_STREAMS {
@@ -178,3 +186,39 @@ impl PartStreamsMap {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use malachitebft_app_channel::app::streaming::StreamContent;
+    use wharfedale_consensus_ctx::ProposalData;
+
+    use super::*;
+
+    fn stream(chunk_len: usize) -> Vec<StreamMessage<ProposalPart>> {
+        let id = StreamId::new(Bytes::from_static(&[0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]));
+        let init = ProposalInit::new(Height::new(1), Round::new(0), Round::Nil, Address::new([7; 20]));
+        let parts = [
+            ProposalPart::Init(init),
+            ProposalPart::Data(ProposalData::new(Bytes::from(vec![0u8; chunk_len]))),
+            ProposalPart::Fin(ProposalFin::new(wharfedale_consensus_ctx::Signature::from_bytes([0; 64]))),
+        ];
+        let mut msgs: Vec<_> =
+            parts.into_iter().enumerate().map(|(i, p)| StreamMessage::new(id.clone(), i as u64, StreamContent::Data(p))).collect();
+        msgs.push(StreamMessage::new(id, 3, StreamContent::Fin));
+        msgs
+    }
+
+    fn assemble(msgs: Vec<StreamMessage<ProposalPart>>) -> Option<ProposalParts> {
+        let mut map = PartStreamsMap::new();
+        let key = malachitebft_app_channel::app::types::Keypair::ed25519_from_bytes([1; 32]).unwrap();
+        let peer = PeerId::from_bytes(&key.public().to_peer_id().to_bytes()).unwrap();
+        msgs.into_iter().filter_map(|m| map.insert(peer, None, m)).last()
+    }
+
+    #[test]
+    fn oversized_chunks_are_ignored() {
+        assert!(assemble(stream(CHUNK_SIZE)).is_some());
+        assert!(assemble(stream(CHUNK_SIZE + 1)).is_none());
+    }
+}

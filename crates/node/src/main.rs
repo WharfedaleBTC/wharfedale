@@ -75,9 +75,26 @@ async fn main() -> Result<()> {
         }
         Cmd::Start { home } => {
             let handle = node::start(&home).await?;
-            tokio::signal::ctrl_c().await?;
+            shutdown_signal().await?;
             handle.shutdown().await;
         }
     }
     Ok(())
+}
+
+/// Ctrl-C, or SIGTERM on Unix (`docker stop`; as PID 1 the default action would be ignored and
+/// the container killed after the grace period, skipping the clean shutdown).
+async fn shutdown_signal() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            r = tokio::signal::ctrl_c() => r,
+            _ = term.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await
+    }
 }
