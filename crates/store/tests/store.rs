@@ -83,7 +83,7 @@ fn genesis_commit_reopen_and_prune() {
     assert_eq!(store.cert(1).unwrap().as_deref(), Some(&b"cert-1"[..]));
     assert_eq!(store.height_of(&block1.hash()).unwrap(), Some(1));
     assert_eq!(store.utxo(&op), Some(entry()));
-    assert_eq!(store.median_time_past(1), 1_800_000_001);
+    assert_eq!(store.block_time(1), block1.header.timestamp);
     // A different genesis is rejected.
     assert!(matches!(store.init_or_check(&genesis("b")), Err(StoreError::WrongChain)));
 }

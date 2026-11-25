@@ -174,7 +174,8 @@ impl Store {
         Ok(first.unwrap_or(0))
     }
 
-    /// Median time past of the committed block at `height`.
+    /// Median time past of the committed block at `height` (Esplora `mediantime`; consensus
+    /// uses block timestamps).
     pub fn mtp(&self, height: u64) -> Result<u64> {
         let txn = self.db.begin_read().map_err(dberr)?;
         let table = txn.open_table(HEADERS).map_err(dberr)?;
@@ -423,7 +424,7 @@ impl LedgerView for Store {
         raw.map(|b| decode_entry(&b).expect("corrupt UTXO entry"))
     }
 
-    fn median_time_past(&self, height: u64) -> u64 {
-        self.mtp(height).expect("storage read failed")
+    fn block_time(&self, height: u64) -> u64 {
+        self.header(height).expect("storage read failed").expect("committed header").timestamp
     }
 }

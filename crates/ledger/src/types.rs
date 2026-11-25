@@ -26,9 +26,9 @@ pub trait LedgerView {
     /// The unspent output at `outpoint`, if any.
     fn utxo(&self, outpoint: &OutPoint) -> Option<UtxoEntry>;
 
-    /// Median time past of the committed block at `height`: the median timestamp of that
-    /// block and its 10 ancestors. Only called for heights below the block being validated.
-    fn median_time_past(&self, height: u64) -> u64;
+    /// Timestamp of the committed block at `height`. Only called for heights below the block
+    /// being validated.
+    fn block_time(&self, height: u64) -> u64;
 }
 
 /// Context of the block a transaction is validated for.
@@ -36,8 +36,9 @@ pub trait LedgerView {
 pub struct ChainCtx {
     /// Height of the block being validated (tip + 1 for mempool admission).
     pub height: u64,
-    /// Median time past of the parent block (BIP113).
-    pub median_time_past: u64,
+    /// Timestamp of the block being validated; for mempool admission, the earliest timestamp a
+    /// block built now could carry (`max(now, tip + 1)`). Time locks compare against it.
+    pub time: u64,
     /// Genesis block hash, committed by every taproot sighash and by Simplicity.
     pub genesis_hash: BlockHash,
     /// Blocks a coinbase output must wait before it can be spent.

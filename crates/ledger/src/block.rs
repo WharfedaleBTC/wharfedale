@@ -154,7 +154,7 @@ impl<V: LedgerView> LedgerView for Overlay<'_, V> {
         self.base.utxo(outpoint)
     }
 
-    fn median_time_past(&self, height: u64) -> u64 {
-        self.base.median_time_past(height)
+    fn block_time(&self, height: u64) -> u64 {
+        self.base.block_time(height)
     }
 }

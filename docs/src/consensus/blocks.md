@@ -39,8 +39,11 @@ Open decision: `state_root` (UTXO multiset hash) — see [Constants](../constant
 | `timestamp` | > parent timestamp; for a proposal also ≤ local time + 10 s (`MAX_TIME_DRIFT`). Not checked for decided blocks received by sync |
 | `tx_merkle_root`, `witness_merkle_root` | Recomputed from `txs`, and the txid tree must not be *mutated* (two equal siblings at any level: CVE-2012-2459, where `[a,b,c]` and `[a,b,c,c]` share a root) (`Block::roots_match`) |
 
-The proposer sets `timestamp = max(now, parent + 1)`. Time locks use the median of the last 11
-header timestamps (MTP).
+The proposer sets `timestamp = max(now, parent + 1)` before assembling the block, and the
+template's time locks are checked against it. Time locks use the block's own timestamp, not the
+median of past blocks (see [Validation](../ledger/validation.md)): the mempool admits a
+time-locked transaction once `max(now, tip + 1)` passes its lock time, and that transaction
+makes the next block, so an idle chain doesn't delay it.
 
 ## Proposal parts
 

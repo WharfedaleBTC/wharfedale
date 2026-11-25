@@ -31,8 +31,8 @@ is deleted in the commit transaction.**
 
 Proposals for a future height are buffered in memory and validated when that height starts.
 
-`Store` implements `LedgerView`: `utxo` reads `utxos`; `median_time_past(h)` is the median of
-the timestamps of headers `h-10..=h`.
+`Store` implements `LedgerView`: `utxo` reads `utxos`; `block_time(h)` is header `h`'s timestamp.
+`Store::mtp(h)`, the median of headers `h-10..=h`, only feeds Esplora's `mediantime`.
 
 **Query indexes.** Implemented, in the commit transaction:
 

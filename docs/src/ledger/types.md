@@ -26,12 +26,12 @@ pub struct UtxoEntry {
 
 pub trait LedgerView {
     fn utxo(&self, op: &OutPoint) -> Option<UtxoEntry>;
-    fn median_time_past(&self, height: u64) -> u64; // MTP of a committed block (BIP68 time locks)
+    fn block_time(&self, height: u64) -> u64; // timestamp of a committed block (BIP68 time locks)
 }
 
 pub struct ChainCtx {
     pub height: u64,             // height of the block being validated (tip + 1 in the mempool)
-    pub median_time_past: u64,   // MTP of the parent block (BIP113)
+    pub time: u64,               // timestamp of the block (mempool: max(now, tip + 1))
     pub genesis_hash: BlockHash, // Simplicity and sighash
     pub coinbase_maturity: u64,  // 1
 }

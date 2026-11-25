@@ -12,7 +12,7 @@ use elements::{
 use wharfedale_ledger::{coinbase_height_prefix, ChainCtx, LedgerView, MemoryLedger, UtxoEntry};
 
 pub const HEIGHT: u64 = 10;
-pub const MTP: u64 = 1_800_000_000; // unix seconds, above LOCKTIME_THRESHOLD
+pub const TIME: u64 = 1_800_000_000; // block timestamp, unix seconds, above LOCKTIME_THRESHOLD
 
 pub fn genesis() -> BlockHash {
     BlockHash::from_byte_array([9; 32])
@@ -27,7 +27,7 @@ pub fn other_asset() -> AssetId {
 }
 
 pub fn ctx() -> ChainCtx {
-    ChainCtx { height: HEIGHT, median_time_past: MTP, genesis_hash: genesis(), coinbase_maturity: 1 }
+    ChainCtx { height: HEIGHT, time: TIME, genesis_hash: genesis(), coinbase_maturity: 1 }
 }
 
 /// A taproot key-path-only owner.

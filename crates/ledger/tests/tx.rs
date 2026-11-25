@@ -228,8 +228,9 @@ fn absolute_lock_time() {
     assert!(run(&ledger, &build(HEIGHT as u32 - 1, 0xffff_fffe)).is_ok());
     assert_eq!(run(&ledger, &build(HEIGHT as u32, 0xffff_fffe)), Err(TxError::NotFinal));
     assert!(run(&ledger, &build(HEIGHT as u32 + 5, 0xffff_ffff)).is_ok(), "final sequences disable lock_time");
-    assert!(run(&ledger, &build(MTP as u32 - 1, 0xffff_fffe)).is_ok());
-    assert_eq!(run(&ledger, &build(MTP as u32, 0xffff_fffe)), Err(TxError::NotFinal));
+    // Time locks compare against the block's own timestamp, not a median of past blocks.
+    assert!(run(&ledger, &build(TIME as u32 - 1, 0xffff_fffe)).is_ok());
+    assert_eq!(run(&ledger, &build(TIME as u32, 0xffff_fffe)), Err(TxError::NotFinal));
 }
 
 #[test]
@@ -250,14 +251,14 @@ fn relative_lock_by_height() {
 fn relative_lock_by_time() {
     let (a, b) = (Key::new(1), Key::new(2));
     let mut ledger = ledger_with(&[(1, &a)]);
-    ledger.set_median_time_past(0, MTP - 600); // MTP of the block before the coin's block
+    ledger.set_block_time(1, TIME - 600); // timestamp of the coin's block
     let build = |units: u32| {
         let mut tx = unsigned(&[outpoint(1)], vec![explicit(&b.spk, 99_000, asset()), fee(1_000)]);
         tx.input[0].sequence = Sequence(SEQUENCE_LOCKTIME_TYPE_FLAG | units);
         sign_all(&ledger, tx, &a)
     };
-    assert!(run(&ledger, &build(1)).is_ok()); // MTP - 600 + 512 - 1 < MTP
-    assert_eq!(run(&ledger, &build(2)), Err(TxError::SequenceLocked)); // MTP - 600 + 1024 - 1 >= MTP
+    assert!(run(&ledger, &build(1)).is_ok()); // TIME - 600 + 512 - 1 < TIME
+    assert_eq!(run(&ledger, &build(2)), Err(TxError::SequenceLocked)); // TIME - 600 + 1024 - 1 >= TIME
 }
 
 fn ledger_utxo(ledger: &MemoryLedger, n: u8) -> TxOut {

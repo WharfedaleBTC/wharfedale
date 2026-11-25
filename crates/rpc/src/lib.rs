@@ -87,12 +87,14 @@ pub struct NodeState {
 }
 
 impl NodeState {
-    /// Context of the next block (tip + 1), against which the mempool admits.
+    /// Context of the next block (tip + 1), against which the mempool admits: its time is the
+    /// earliest timestamp a block built now could carry.
     pub fn next_block_ctx(&self) -> Result<ChainCtx, String> {
         let (tip, _) = self.store.tip().map_err(|e| e.to_string())?;
+        let parent = self.store.header(tip).map_err(|e| e.to_string())?.ok_or("missing tip header")?;
         Ok(ChainCtx {
             height: tip + 1,
-            median_time_past: self.store.mtp(tip).map_err(|e| e.to_string())?,
+            time: unix_now().max(parent.timestamp + 1),
             genesis_hash: self.genesis_hash,
             coinbase_maturity: self.coinbase_maturity,
         })
@@ -133,4 +135,8 @@ impl NodeState {
         }
         Ok(txid)
     }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }

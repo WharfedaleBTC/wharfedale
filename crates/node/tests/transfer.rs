@@ -96,6 +96,17 @@ const P2PK: &str = "fn main() {
     jet::bip_0340_verify((param::OWNER, jet::sig_all_hash()), witness::SIG)
 }";
 
+/// P2PK spendable once the block's timestamp passes `AFTER` (unix seconds).
+const TIMELOCK: &str = "fn main() {
+    let after: Time = param::AFTER;
+    jet::check_lock_time(after);
+    jet::bip_0340_verify((param::OWNER, jet::sig_all_hash()), witness::SIG)
+}";
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+}
+
 fn p2pk(owner: &[u8; 32]) -> Contract {
     Contract::compile(P2PK, &format!(r#"{{"OWNER": "0x{}"}}"#, contract::pubkey(owner))).unwrap()
 }
@@ -308,6 +319,32 @@ async fn confidential_transfers_issuance_and_esplora() {
         let claimed: u64 = txs[0]["vout"].as_array().unwrap().iter().map(|o| o["value"].as_u64().unwrap()).sum();
         assert_eq!(claimed, fees, "block {h}");
     }
+
+    // Time locks compare against the block's own timestamp, not a median of past blocks: once
+    // the time has passed, a time-locked spend is admitted and makes the next block, even on
+    // an idle chain.
+    let after = unix_now() + 4;
+    let timelocked = move || {
+        Contract::compile(TIMELOCK, &format!(r#"{{"OWNER": "0x{}", "AFTER": "{after}"}}"#, contract::pubkey(&bob))).unwrap()
+    };
+    let (u, a) = (urls[1].clone(), timelocked().address().to_string());
+    let lock = blocking(move || send(&Rpc(u), &alice, &a, 100_000, None, FEE)).await.unwrap();
+    confirmed(urls[2].clone(), lock.to_string()).await;
+    let (u, w, to) = (urls[3].clone(), sign_with("bob.json"), address(&bob).to_string());
+    let early = blocking(move || contract::spend(&Rpc(u), &timelocked(), &w, &to, 50_000, None, FEE, Some(after as u32))).await;
+    let early = early.unwrap_err().to_string();
+    assert!(early.contains("lock_time not reached"), "{early}");
+    while unix_now() <= after {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let tip = *nodes[0].tip.borrow();
+    let (u, w, to) = (urls[3].clone(), sign_with("bob.json"), address(&bob).to_string());
+    let late = blocking(move || contract::spend(&Rpc(u), &timelocked(), &w, &to, 50_000, None, FEE, Some(after as u32))).await.unwrap();
+    let height = confirmed(urls[0].clone(), late.to_string()).await;
+    assert_eq!(height, tip + 1);
+    let hash = blocking({ let u = urls[0].clone(); move || Rpc(u).call("getblockhash", json!([height])).unwrap() }).await;
+    let block = rest(&urls[0], &format!("block/{}", hash.as_str().unwrap())).unwrap();
+    assert!(block["timestamp"].as_u64().unwrap() > after, "{block}");
 
     for n in nodes {
         n.shutdown().await;

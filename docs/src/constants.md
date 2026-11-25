@@ -12,7 +12,7 @@
 | `MAX_BLOCK_WEIGHT` | 4 000 000 WU (TBD, size to the verification budget per round) | Consensus |
 | `MAX_BLOCK_SIMPLICITY_COST` | TBD | Consensus |
 | Timestamp drift | 10 s | Proposal validity |
-| MTP window | 11 blocks | Consensus |
+| MTP window | 11 blocks | Esplora `mediantime` only (time locks use block timestamps) |
 | `min_fee_per_kvb` | 10 units per 1 000 vbytes (default; `config.toml`) | Mempool policy |
 | Wallet default fee (`DEFAULT_FEE`) | 100 units, flat | SDKs, CLI, web app |
 | `MAX_POOL` | 300 MB vsize | Mempool policy |

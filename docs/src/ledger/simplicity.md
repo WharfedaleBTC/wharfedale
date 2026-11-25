@@ -52,7 +52,7 @@ the decoder and evaluator); C symbols are prefixed `rustsimplicity_0_8_`.
 | `genesis_block_hash` | Wharfedale genesis hash (replay protection via `sig_all_hash`) |
 | `lbtc_asset` | Liquid's constant L-BTC id. **Meaningless here: contracts must not use it.** |
 | Peg-in jets | Always "no pegin" |
-| Lock jets (`check_lock_*`, `tx_lock_*`) | Read tx fields; meaningful because consensus enforces nLockTime and BIP68 |
+| Lock jets (`check_lock_*`, `tx_lock_*`) | Read tx fields; meaningful because consensus enforces nLockTime and BIP68. Time locks are enforced against the block's timestamp (not MTP), so `check_lock_time(t)` means "in a block stamped after `t`" |
 | Everything else | Identical to Liquid |
 
 There is no current-height jet, so a Simplicity result depends only on the transaction, the

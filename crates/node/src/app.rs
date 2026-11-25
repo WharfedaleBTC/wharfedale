@@ -135,13 +135,14 @@ impl App {
             .with_vote_extension_policy(VoteExtensionPolicy::Disabled)
     }
 
-    fn chain_ctx(&self, height: u64) -> Result<ChainCtx> {
-        Ok(ChainCtx {
+    /// Context of the block at `height` with timestamp `time`.
+    fn chain_ctx(&self, height: u64, time: u64) -> ChainCtx {
+        ChainCtx {
             height,
-            median_time_past: self.node.store.mtp(height - 1)?,
+            time,
             genesis_hash: self.node.genesis_hash,
             coinbase_maturity: COINBASE_MATURITY,
-        })
+        }
     }
 
     fn store(&self) -> &Store {
@@ -250,7 +251,9 @@ impl App {
         }
 
         let parent = self.store().header(h - 1)?.ok_or_else(|| eyre!("missing parent header {}", h - 1))?;
-        let ctx = self.chain_ctx(h)?;
+        // The timestamp is fixed first: the template's time locks are checked against it.
+        let timestamp = unix_now().max(parent.timestamp + 1);
+        let ctx = self.chain_ctx(h, timestamp);
         let Some(txs) = self.assemble(h, &ctx, &proposer.fee_script)? else {
             return Ok(None);
         };
@@ -258,7 +261,7 @@ impl App {
             version: Header::VERSION,
             height: h,
             prev_block_hash: parent.hash().to_byte_array(),
-            timestamp: unix_now().max(parent.timestamp + 1),
+            timestamp,
             proposer: self.address.into_inner(),
             tx_merkle_root: merkle::tx_root(&txs),
             witness_merkle_root: merkle::witness_root(&txs),
@@ -343,7 +346,7 @@ impl App {
         if let Err(e) = check_header(&block.header, &parent, &proposer.into_inner(), now, MAX_TIME_DRIFT) {
             return Ok(Err(e.to_string()));
         }
-        match connect_block(&*self.node.store, &block.txs, &self.chain_ctx(h)?) {
+        match connect_block(&*self.node.store, &block.txs, &self.chain_ctx(h, block.header.timestamp)) {
             Ok(diff) => Ok(Ok(diff)),
             Err(BlockError::Tx { error: error @ TxError::SimplicityNodeFault(..), .. }) => {
                 Err(eyre!("could not evaluate the block: {error}"))
@@ -422,7 +425,7 @@ impl App {
             .ok_or_else(|| eyre!("decided block {hash} at {h} is unknown"))?;
         let (_, block) = records::decode_proposal(&record)?;
         // Validated again here: no result of an earlier check is reused.
-        let diff = connect_block(&*self.node.store, &block.txs, &self.chain_ctx(h)?)?;
+        let diff = connect_block(&*self.node.store, &block.txs, &self.chain_ctx(h, block.header.timestamp))?;
         self.store().commit(&block, &cert_bytes, &diff)?;
         {
             let mut pool = self.node.pool();

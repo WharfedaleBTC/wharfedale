@@ -18,7 +18,7 @@ fn asset() -> AssetId {
 }
 
 fn ctx() -> ChainCtx {
-    ChainCtx { height: 10, median_time_past: 1_800_000_000, genesis_hash: BlockHash::from_byte_array([9; 32]), coinbase_maturity: 1 }
+    ChainCtx { height: 10, time: 1_800_000_000, genesis_hash: BlockHash::from_byte_array([9; 32]), coinbase_maturity: 1 }
 }
 
 fn out(spk: &Script, value: u64) -> TxOut {

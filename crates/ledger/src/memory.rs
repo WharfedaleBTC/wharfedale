@@ -9,7 +9,7 @@ use crate::types::{BlockDiff, LedgerView, UtxoEntry};
 #[derive(Clone, Debug, Default)]
 pub struct MemoryLedger {
     utxos: HashMap<OutPoint, UtxoEntry>,
-    mtp: BTreeMap<u64, u64>,
+    times: BTreeMap<u64, u64>,
 }
 
 impl MemoryLedger {
@@ -21,9 +21,9 @@ impl MemoryLedger {
         self.utxos.insert(outpoint, entry);
     }
 
-    /// Records the median time past of the block at `height`.
-    pub fn set_median_time_past(&mut self, height: u64, mtp: u64) {
-        self.mtp.insert(height, mtp);
+    /// Records the timestamp of the block at `height`.
+    pub fn set_block_time(&mut self, height: u64, time: u64) {
+        self.times.insert(height, time);
     }
 
     /// Applies a block's state change.
@@ -50,7 +50,7 @@ impl LedgerView for MemoryLedger {
         self.utxos.get(outpoint).cloned()
     }
 
-    fn median_time_past(&self, height: u64) -> u64 {
-        self.mtp.get(&height).copied().unwrap_or(0)
+    fn block_time(&self, height: u64) -> u64 {
+        self.times.get(&height).copied().unwrap_or(0)
     }
 }

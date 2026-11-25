@@ -6,7 +6,7 @@
 |---|---|---|---|
 | 1 | Stateless | ≥ 1 input and output; weight ≤ `MAX_TX_WEIGHT`; no duplicate prevouts; version 2; no pegin; empty `scriptSig`; empty pegin witness; allowed output kinds; valid encodings; explicit values in `0 < v ≤ MAX_MONEY` (zero only for `OP_RETURN`); fee outputs explicit and > 0; explicit value ⇒ no rangeproof; explicit asset ⇒ no surjection proof | `CheckTransaction`, `HasValidFee` |
 | 2 | Inputs | Every prevout in the `LedgerView`; coinbase outputs mature | `Consensus::CheckTxInputs` |
-| 3 | Locks | nLockTime (height, or MTP for times) unless all sequences final; BIP68 relative locks | `IsFinalTx`, `SequenceLocks` |
+| 3 | Locks | nLockTime (height, or the block's timestamp for times) unless all sequences final; BIP68 relative locks, time-based ones from the timestamp of the coin's block | `IsFinalTx`, `SequenceLocks` |
 | 4 | Amounts | Build input commitments + issuance pseudo-inputs + surjection domain; reissuance token check; build output commitments; balance; rangeproofs; surjection proofs | `VerifyAmounts`, `VerifyIssuanceAmount`, `CachingRangeProofChecker::VerifyRangeProof` |
 | 5 | Spends | Per input: taproot key path or Simplicity ([Simplicity](simplicity.md)) | `VerifyWitnessProgram` (taproot branch) |
 | 6 | Fees | Return Σ explicit fee outputs per asset | `GetFeeMap` |
@@ -66,6 +66,7 @@ otherwise → reject (Tapscript and unknown shapes)
 | Taproot leaf versions other than `0xbe` | Tapscript runs; unknown versions succeed | Rejected |
 | Fee outputs | Stored in the coin set (unspendable) | Not stored |
 | Transaction version | Any | 2 only |
+| Time locks (nLockTime ≥ 500 000 000, BIP68 time) | Against the median time past of the last 11 blocks (BIP113); a relative lock starts at the MTP of the block before the coin's | Against the block's own timestamp; a relative lock starts at the timestamp of the coin's block. Blocks are made only when there is work, so a median of past blocks would stall on an idle chain; this way a spend whose time has passed is admitted and makes the next block |
 | Explicit issuance amount | ≤ `MAX_MONEY` for the pegged asset, ≤ `i64::MAX` otherwise | ≤ `MAX_MONEY` for every asset |
 | Transaction weight | Stripped size × 4 ≤ `MAX_BLOCK_WEIGHT` | Full weight ≤ `MAX_TX_WEIGHT` (400 000) |
 | Empty-script output with a confidential value | Unspendable output | Rejected (an empty script is a fee output, which must be explicit) |

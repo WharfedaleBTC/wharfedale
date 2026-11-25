@@ -34,7 +34,7 @@ wharfedale-wallet --rpc http://127.0.0.1:18443 keygen --out alice.json
 | `contract-address --program F.simf [--args A.json] [--script \| --cmr]` | Contract address `wf1p…`, output script hex, or CMR hex |
 | `contract-balance --program F.simf [--args A.json] [--asset ID]` | Coins locked to the contract |
 | `contract-artifact --program F.simf [--args A.json]` | `{cmr, program, signatures}` of a signature-only contract, for the TypeScript SDK |
-| `contract-spend --program F.simf [--args A.json] [--witness W.json] --to ADDR --amount N [--asset ID] [--fee N] [--lock-time H]` | Spend contract coins; prints txid |
+| `contract-spend --program F.simf [--args A.json] [--witness W.json] --to ADDR --amount N [--asset ID] [--fee N] [--lock-time N]` | Spend contract coins; prints txid |
 | `wait-tx --txid T [--timeout S]` | Prints the block height once confirmed |
 | `wait-height --height H [--timeout S]` | Waits for the chain |
 | `rpc METHOD [PARAMS…]` | Any JSON-RPC call; params parsed as JSON when possible |
@@ -80,7 +80,9 @@ Contract outputs are explicit; only explicit coins are found by `contract-balanc
 
 1. Select contract coins for `amount` (asset) and `fee` (fee asset); change returns to the
    contract; payment blinded if `to` is `wfc1`.
-2. `--lock-time H`: nLockTime = H, sequences `0xfffffffe` (for `check_lock_height`).
+2. `--lock-time N`: nLockTime = N, sequences `0xfffffffe`: a height below 500 000 000 (for
+   `check_lock_height`), a unix time at or above (for `check_lock_time`; compared with the
+   block's timestamp).
 3. Per input: rust-simplicity `ElementsEnv` (tx, all spent outputs, ix, CMR, control block,
    genesis) → `sig_all_hash`. In the witness JSON, every `"sign:<key file>"` string becomes a
    BIP340 signature by that key (untweaked) over it.

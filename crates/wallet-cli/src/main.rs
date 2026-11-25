@@ -144,7 +144,8 @@ enum Cmd {
         asset: Option<String>,
         #[arg(long, default_value_t = wharfedale_sdk::wallet::DEFAULT_FEE)]
         fee: u64,
-        /// Transaction lock time (block height), for contracts that check it.
+        /// Transaction lock time, for contracts that check it: a block height below 500000000, a
+        /// unix time (compared with the block's timestamp) at or above.
         #[arg(long)]
         lock_time: Option<u32>,
     },
