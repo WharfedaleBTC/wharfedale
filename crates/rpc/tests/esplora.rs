@@ -248,3 +248,105 @@ async fn blocks_block_txs_asset_names_and_network_info() {
     let _ = stop.send(());
     let _ = bare_stop.send(());
 }
+
+/// Esplora's asset history (`tx_count`, `/asset/:id/txs/chain` paging), the scripthash summary,
+/// and the Bitcoin Core fields of `getrawtransaction`, `getblockchaininfo` and `getindexinfo`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn asset_history_scripthash_stats_and_core_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("store.redb")).unwrap();
+    store
+        .init_or_check(&Genesis {
+            chain_id: CHAIN.into(),
+            genesis_time: 1_800_000_000,
+            validators: vec![GenesisValidator { public_key: hex::encode([1u8; 32]), voting_power: 1 }],
+            fee_asset: wharfedale_chain::fee_asset_for(CHAIN).to_string(),
+            initial_txs: vec![],
+        })
+        .unwrap();
+
+    // Block 1 issues the asset; blocks 2..=28 each burn some of it (27 burns, so the history
+    // spans two pages); block 29 is unrelated; block 30 reissues.
+    let issue = tx(1, 0, Some([7; 32]), None);
+    let (asset, _) = issue.input[0].issuance_ids();
+    let burn = |h: u64| {
+        let mut o = out(Builder::new().push_opcode(opcodes::all::OP_RETURN).into_script());
+        o.asset = Asset::Explicit(asset);
+        o.value = CValue::Explicit(1);
+        tx(h, 0, None, Some(o))
+    };
+    commit(&store, vec![issue.clone()]);
+    let burns: Vec<Transaction> = (2..=28).map(burn).collect();
+    for b in &burns {
+        commit(&store, vec![b.clone()]);
+    }
+    commit(&store, vec![tx(29, 0, None, None)]);
+    let mut reissue = tx(30, 0, None, None);
+    let entropy = elements::AssetId::generate_asset_entropy(issue.input[0].previous_output, elements::ContractHash::from_byte_array([7; 32]));
+    reissue.input[0].asset_issuance = AssetIssuance {
+        asset_blinding_nonce: elements::AssetBlindingNonce::from_byte_array([9; 32]),
+        asset_entropy: elements::AssetEntropy::from_byte_array(entropy.to_byte_array()),
+        amount: CValue::Explicit(500),
+        inflation_keys: CValue::Null,
+    };
+    assert_eq!(reissue.input[0].issuance_ids().0, asset);
+    let last = commit(&store, vec![reissue.clone()]);
+    while store.index_next().unwrap().is_some() {}
+    assert!(!store.check_index_version().unwrap(), "a current index is kept");
+    let store = Arc::new(store);
+
+    let (u, stop) = serve(state(store, None));
+    wait_up(&u).await;
+    let asset_s = asset.to_string();
+    tokio::task::spawn_blocking(move || {
+        let a = ok(&format!("{u}/asset/{asset_s}"));
+        assert_eq!(a["chain_stats"]["tx_count"], json!(29), "{a}");
+        assert_eq!(a["chain_stats"]["issuance_count"], json!(2), "{a}");
+        assert_eq!(a["mempool_stats"], json!({ "tx_count": 0, "issuance_count": 0 }));
+
+        // The asset registry lists every issued asset, newest first, with the total in a header.
+        let listed = ureq::get(&format!("{u}/assets/registry?start_index=0&limit=10")).call().unwrap();
+        assert_eq!(listed.header("x-total-results"), Some("1"));
+        let listed: Value = listed.into_json().unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        assert_eq!(listed[0]["asset_id"], json!(asset_s));
+        assert_eq!(listed[0]["chain_stats"]["issuance_count"], json!(2));
+        assert!(listed[0].get("mempool_stats").is_none());
+        assert_eq!(ok(&format!("{u}/assets/registry?start_index=5")), json!([]));
+
+        // Newest first, 25 per page, then the rest after the last seen txid.
+        let page = ok(&format!("{u}/asset/{asset_s}/txs/chain"));
+        let ids = |v: &Value| v.as_array().unwrap().iter().map(|t| t["txid"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+        let first = ids(&page);
+        assert_eq!(first.len(), 25);
+        assert_eq!(first[0], reissue.txid().to_string());
+        assert_eq!(first[1], burns[26].txid().to_string());
+        assert_eq!(page[0]["status"]["block_hash"], json!(last.hash().to_string()));
+        let rest = ids(&ok(&format!("{u}/asset/{asset_s}/txs/chain/{}", first[24])));
+        assert_eq!(rest.len(), 4);
+        assert_eq!(rest.last().unwrap(), &issue.txid().to_string());
+        assert!(ids(&ok(&format!("{u}/asset/{asset_s}/txs/chain/{}", rest[3]))).is_empty());
+        assert_eq!(get(&format!("{u}/asset/{}/txs/chain", "00".repeat(32))).0, 404);
+
+        // Every test transaction pays the same Taproot script: 30 of them.
+        let sh = hex::encode(sha256::Hash::hash(taproot().as_bytes()).to_byte_array());
+        let stats = ok(&format!("{u}/scripthash/{sh}"));
+        assert_eq!(stats, json!({ "scripthash": sh, "chain_stats": { "tx_count": 30 }, "mempool_stats": { "tx_count": 0 } }));
+        assert_eq!(ok(&format!("{u}/scripthash/{}", "11".repeat(32)))["chain_stats"]["tx_count"], json!(0));
+
+        // Bitcoin Core fields.
+        let call = |method: &str, params: Value| -> Value {
+            ureq::post(&u).send_json(json!({ "method": method, "params": params, "id": 1 })).unwrap().into_json::<Value>().unwrap()["result"].clone()
+        };
+        let raw = call("getrawtransaction", json!([reissue.txid().to_string(), true]));
+        assert_eq!(raw["blockhash"], json!(last.hash().to_string()));
+        assert_eq!(raw["blockheight"], json!(30));
+        assert_eq!(raw["blocktime"], json!(last.header.timestamp));
+        let info = call("getblockchaininfo", json!([]));
+        assert_eq!((&info["headers"], &info["pruned"], &info["initialblockdownload"]), (&json!(30), &json!(false), &json!(false)));
+        assert_eq!(call("getindexinfo", json!([])), json!({ "txindex": { "synced": true, "best_block_height": 30 } }));
+    })
+    .await
+    .unwrap();
+    let _ = stop.send(());
+}

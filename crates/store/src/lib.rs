@@ -88,9 +88,12 @@ impl Store {
             txn.open_table(index::SPK_HISTORY).map_err(dberr)?;
             txn.open_table(index::SPENT_BY).map_err(dberr)?;
             txn.open_table(index::ASSETS).map_err(dberr)?;
+            txn.open_table(index::ASSET_HISTORY).map_err(dberr)?;
         }
         txn.commit().map_err(dberr)?;
-        Ok(Self { db })
+        let store = Self { db };
+        store.check_index_version()?;
+        Ok(store)
     }
 
     /// Initialises an empty store from genesis, or checks that an existing store matches it.

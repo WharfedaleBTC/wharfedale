@@ -11,14 +11,15 @@ positional. Methods run on a blocking thread (validation is CPU-bound), except
 
 | Method | Params | Result |
 |---|---|---|
-| `getblockchaininfo` | — | `chain`, `blocks`, `bestblockhash`, `genesis_hash`, `fee_asset`, `mempool_size`, `role` (`validator` \| `full`) |
+| `getblockchaininfo` | — | `chain`, `blocks`, `bestblockhash`, `genesis_hash`, `fee_asset`, `mempool_size`, `role` (`validator` \| `full`); for Bitcoin Core tooling also `headers` (= `blocks`), `pruned: false`, `initialblockdownload: false` (no IBD mode: compare `blocks` with a peer) |
+| `getindexinfo` | — | `{txindex: {synced: true, best_block_height}}` (the transaction index is written with each block) |
 | `getblockcount` | — | tip height |
 | `getblockhash` | height | block hash |
 | `getblock` | hash, verbosity = 1 | 0: hex of `Block::encode`; 1: header + txids; 2: header + decoded txs |
 | `getblockheader` | hash | `hash`, `height`, `previousblockhash`, `time`, `proposer`, `merkleroot`, `witnessmerkleroot`, `confirmations` |
 | `sendrawtransaction` | hex | txid (admitted and gossiped) |
 | `testmempoolaccept` | [hex, …] | `[{txid, allowed, reject-reason?}]` (not inserted) |
-| `getrawtransaction` | txid, verbose = false | hex, or decoded + `hex`, `blockheight`, `confirmations` |
+| `getrawtransaction` | txid, verbose = false | hex, or decoded + `hex`, `blockhash`, `blockheight`, `blocktime`, `confirmations` |
 | `decoderawtransaction` | hex | decoded transaction |
 | `gettxout` | txid, n, include_mempool = true | output + `confirmations`, `coinbase`, `bestblock`; `null` if spent |
 | `getrawmempool` | — | txids, highest fee rate first |
@@ -95,11 +96,13 @@ errors are HTTP 400/404 with a text body.
 | `POST /tx` | body: tx hex → txid (admitted and gossiped) |
 | `GET /tx/:txid`, `/tx/:txid/hex`, `/tx/:txid/status` | transaction JSON (mempool or chain), hex, status |
 | `GET /tx/:txid/outspends`, `/tx/:txid/outspend/:vout` | `{spent, txid, vin, status}` (mempool spends first) |
+| `GET /scripthash/:hash` | `{scripthash, chain_stats {tx_count}, mempool_stats {tx_count}}` (counts only: amounts are often confidential) |
 | `GET /scripthash/:hash/txs` | ≤ 50 mempool txs + newest 25 confirmed |
 | `GET /scripthash/:hash/txs/chain[/:last_seen_txid]`, `/txs/mempool` | paging, mempool only |
 | `GET /scripthash/:hash/utxo` | `txid`, `vout`, `status`, `value`/`valuecommitment`, `asset`/`assetcommitment`, `nonce`/`noncecommitment`, `range_proof`, `surjection_proof` |
 | `GET /address/:address/txs`, `/address/:address/utxo` | same, for a `wf1…`/`wfc1…` address |
-| `GET /asset/:id` | issued asset: `issuance_txin`, `issuance_prevout`, `status`, `contract_hash`, `reissuance_token`, `entropy`, `name`, `ticker`, `precision` (Wharfedale; `null` unless named by [WFA1](#asset-names-wfa1)), `chain_stats {issuance_count, issued_amount, has_blinded_issuances, reissuance_tokens}`; the fee asset: `{asset_id, fee_asset: true}` |
+| `GET /asset/:id` | issued asset: `issuance_txin`, `issuance_prevout`, `status`, `contract_hash`, `reissuance_token`, `entropy`, `name`, `ticker`, `precision` (Wharfedale; `null` unless named by [WFA1](#asset-names-wfa1)), `chain_stats {tx_count, issuance_count, issued_amount, has_blinded_issuances, reissuance_tokens}`, `mempool_stats {tx_count, issuance_count}`; the fee asset: `{asset_id, fee_asset: true}`. `tx_count`: transactions in the asset's history, (re)issuances and burns (an explicit `OP_RETURN` output of the asset) |
+| `GET /asset/:id/txs/chain[/:last_seen_txid]` | the asset's history, newest 25 confirmed per page (issued assets only) |
 | `GET /mempool/txids` | txids |
 | `GET /fee-estimates` | every target → `min_fee_per_kvb / 1000` (units per vbyte) |
 
@@ -114,7 +117,7 @@ block_height, block_hash, block_time}`. `issuance`: `asset_id`, `is_reissuance`,
 `:hash` (scripthash) = SHA-256(scriptPubKey), hex, **not reversed**. To confirm against an
 existing Esplora client (for example LWK) before relying on it.
 
-Not implemented: `/address/:a` and `/scripthash/:h` stats objects, `/tx/:txid/merkle-proof`,
+Not implemented: the `/address/:a` stats object, funded/spent sums in the `/scripthash/:h` one, `/tx/:txid/merkle-proof`,
 address-prefix search, mempool recent/fee histograms.
 
 ## Asset names (WFA1)

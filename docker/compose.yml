@@ -3,8 +3,8 @@
 #
 # RPC: node0..node3 on host ports 18443..18446, rpc0 (full node) on 18447. Web app: :8080.
 # Images are built from source: the build context is the folder holding wharfedale/,
-# malachite/ (the fork), wharfedale-sdk-rs/ and, for the web app, wharfedale-web/ and
-# wharfedale-sdk-ts/.
+# malachite/ (the fork), wharfedale-sdk-rs/ and, for the web app, wharfedale-web/,
+# wharfedale-sdk-ts/ and damp/ (its regulated-asset signer is compiled into the web image).
 
 name: wharfedale
 

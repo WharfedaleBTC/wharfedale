@@ -6,7 +6,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -46,6 +46,7 @@ pub fn router() -> Router<NodeState> {
         .route("/tx/:txid/status", get(tx_status))
         .route("/tx/:txid/outspends", get(outspends))
         .route("/tx/:txid/outspend/:vout", get(outspend))
+        .route("/scripthash/:hash", get(sh_stats))
         .route("/scripthash/:hash/txs", get(sh_txs))
         .route("/scripthash/:hash/txs/chain", get(sh_txs_chain))
         .route("/scripthash/:hash/txs/chain/:last", get(sh_txs_chain_after))
@@ -53,7 +54,10 @@ pub fn router() -> Router<NodeState> {
         .route("/scripthash/:hash/utxo", get(sh_utxo))
         .route("/address/:addr/txs", get(addr_txs))
         .route("/address/:addr/utxo", get(addr_utxo))
+        .route("/assets/registry", get(assets_registry))
         .route("/asset/:id", get(asset))
+        .route("/asset/:id/txs/chain", get(asset_txs_chain))
+        .route("/asset/:id/txs/chain/:last", get(asset_txs_chain_after))
         .route("/mempool/txids", get(mempool_txids))
         .route("/fee-estimates", get(fee_estimates))
 }
@@ -273,15 +277,19 @@ fn mempool_touching(st: &NodeState, script: &[u8; 32]) -> ApiResult<Vec<Arc<Tran
     Ok(out)
 }
 
+/// `(height, position in block)` of a confirmed transaction: the paging cursor of the history
+/// endpoints.
+fn tx_position(st: &NodeState, txid: &Txid) -> ApiResult<(u64, u32)> {
+    let (_, h) = st.store.transaction(txid).map_err(internal)?.ok_or_else(|| not_found("Transaction not found"))?;
+    let block = st.store.block(h).map_err(internal)?.ok_or_else(|| internal("missing block"))?;
+    let pos = block.txs.iter().position(|t| t.txid() == *txid).unwrap_or(0) as u32;
+    Ok((h, pos))
+}
+
 fn chain_txs(st: &NodeState, sh: &[u8; 32], after: Option<Txid>) -> ApiResult<Vec<Value>> {
     let before = match after {
         None => None,
-        Some(txid) => {
-            let (_, h) = st.store.transaction(&txid).map_err(internal)?.ok_or_else(|| not_found("Transaction not found"))?;
-            let block = st.store.block(h).map_err(internal)?.ok_or_else(|| internal("missing block"))?;
-            let pos = block.txs.iter().position(|t| t.txid() == txid).unwrap_or(0) as u32;
-            Some((h, pos))
-        }
+        Some(txid) => Some(tx_position(st, &txid)?),
     };
     let rows = st.store.script_history(sh, before, CHAIN_PAGE).map_err(internal)?;
     rows.into_iter()
@@ -437,7 +445,10 @@ async fn tx_status(State(st): State<NodeState>, Path(txid): Path<String>) -> Api
 }
 
 fn outspend_json(st: &NodeState, op: &OutPoint) -> ApiResult<Value> {
-    if let Some(spender) = st.pool().spender(op) {
+    // The pool guard must be dropped before `find_tx` locks the pool again: in an `if let`
+    // scrutinee it would live through the whole block (Rust 2021) and deadlock this thread.
+    let spender = st.pool().spender(op);
+    if let Some(spender) = spender {
         let vin = find_tx(st, &spender)?
             .and_then(|(t, _)| t.input.iter().position(|i| i.previous_output == *op))
             .unwrap_or(0);
@@ -470,6 +481,21 @@ fn history(st: &NodeState, sh: [u8; 32]) -> ApiResult<Vec<Value>> {
     let mut out: Vec<Value> = mempool_touching(st, &sh)?.iter().map(|t| tx_json(st, t, None)).collect::<ApiResult<_>>()?;
     out.extend(chain_txs(st, &sh, None)?);
     Ok(out)
+}
+
+/// Esplora's script-hash summary. Only transaction counts: amounts are often confidential.
+async fn sh_stats(State(st): State<NodeState>, Path(hash): Path<String>) -> ApiResult<Json<Value>> {
+    blocking(st, move |st| {
+        let sh = parse_sh(&hash)?;
+        let chain = st.store.script_tx_count(&sh).map_err(internal)?;
+        let mempool = mempool_touching(st, &sh)?.len();
+        Ok(Json(json!({
+            "scripthash": hash,
+            "chain_stats": { "tx_count": chain },
+            "mempool_stats": { "tx_count": mempool },
+        })))
+    })
+    .await
 }
 
 async fn sh_txs(State(st): State<NodeState>, Path(hash): Path<String>) -> ApiResult<Json<Value>> {
@@ -534,26 +560,100 @@ async fn asset(State(st): State<NodeState>, Path(id): Path<String>) -> ApiResult
             return Ok(Json(json!({ "asset_id": id.to_string(), "fee_asset": true })));
         }
         let r = st.store.asset(&id).map_err(internal)?.ok_or_else(|| not_found("Asset not found"))?;
-        Ok(Json(json!({
-            "asset_id": r.asset_id,
-            "issuance_txin": { "txid": r.issuance_txid, "vin": r.issuance_vin },
-            "issuance_prevout": { "txid": r.issuance_prevout.0, "vout": r.issuance_prevout.1 },
-            "status": status(st, Some(r.height))?,
-            "contract_hash": r.contract_hash,
-            "reissuance_token": r.reissuance_token,
-            "entropy": r.entropy,
-            "name": r.name,
-            "ticker": r.ticker,
-            "precision": r.precision,
-            "chain_stats": {
-                "issuance_count": r.issuance_count,
-                "issued_amount": r.issued_amount,
-                "has_blinded_issuances": r.has_blinded_issuances,
-                "reissuance_tokens": r.reissuance_tokens,
-            },
-        })))
+        let mut record = asset_json(st, &r)?;
+        record["mempool_stats"] = asset_mempool_stats(st, &id);
+        Ok(Json(record))
     })
     .await
+}
+
+/// An indexed asset as Esplora's `/asset/:id` shows it, without mempool statistics.
+fn asset_json(st: &NodeState, r: &wharfedale_store::AssetRecord) -> ApiResult<Value> {
+    Ok(json!({
+        "asset_id": r.asset_id,
+        "issuance_txin": { "txid": r.issuance_txid, "vin": r.issuance_vin },
+        "issuance_prevout": { "txid": r.issuance_prevout.0, "vout": r.issuance_prevout.1 },
+        "status": status(st, Some(r.height))?,
+        "contract_hash": r.contract_hash,
+        "reissuance_token": r.reissuance_token,
+        "entropy": r.entropy,
+        "name": r.name,
+        "ticker": r.ticker,
+        "precision": r.precision,
+        "chain_stats": {
+            "tx_count": r.tx_count,
+            "issuance_count": r.issuance_count,
+            "issued_amount": r.issued_amount,
+            "has_blinded_issuances": r.has_blinded_issuances,
+            "reissuance_tokens": r.reissuance_tokens,
+        },
+    }))
+}
+
+#[derive(serde::Deserialize)]
+struct RegistryQuery {
+    start_index: Option<usize>,
+    limit: Option<usize>,
+}
+
+/// Every asset issued on this chain, newest first: `start_index` and `limit` (1–100, default 25)
+/// page through them, and `x-total-results` carries the count, as Esplora's asset registry does.
+async fn assets_registry(State(st): State<NodeState>, Query(q): Query<RegistryQuery>) -> ApiResult<Response> {
+    blocking(st, move |st| {
+        let mut all = st.store.assets().map_err(internal)?;
+        all.sort_by(|a, b| b.height.cmp(&a.height).then_with(|| a.asset_id.cmp(&b.asset_id)));
+        let total = all.len();
+        let start = q.start_index.unwrap_or(0).min(total);
+        let end = start.saturating_add(q.limit.unwrap_or(CHAIN_PAGE).clamp(1, 100)).min(total);
+        let page = all[start..end].iter().map(|r| asset_json(st, r)).collect::<ApiResult<Vec<_>>>()?;
+        let mut response = Json(json!(page)).into_response();
+        response.headers_mut().insert("x-total-results", total.into());
+        Ok(response)
+    })
+    .await
+}
+
+/// Mempool transactions that (re)issue or burn `asset`.
+fn asset_mempool_stats(st: &NodeState, asset: &AssetId) -> Value {
+    let pool = st.pool();
+    let (mut txs, mut issuances) = (0u64, 0u64);
+    for txid in pool.txids() {
+        let Some(e) = pool.get(&txid) else { continue };
+        let issued = e.tx.input.iter().filter(|i| !i.asset_issuance.is_null() && i.issuance_ids().0 == *asset).count() as u64;
+        let burns = e.tx.output.iter().any(|o| o.script_pubkey.is_op_return() && o.asset == Asset::Explicit(*asset));
+        issuances += issued;
+        if issued > 0 || burns {
+            txs += 1;
+        }
+    }
+    json!({ "tx_count": txs, "issuance_count": issuances })
+}
+
+/// Confirmed transactions of `asset`'s history, newest first, [`CHAIN_PAGE`] at a time.
+fn asset_chain_txs(st: &NodeState, id: &str, after: Option<Txid>) -> ApiResult<Vec<Value>> {
+    let asset = AssetId::from_str(id).map_err(|_| bad("Invalid asset id"))?;
+    st.store.asset(&asset).map_err(internal)?.ok_or_else(|| not_found("Asset not found"))?;
+    let before = match after {
+        None => None,
+        Some(txid) => Some(tx_position(st, &txid)?),
+    };
+    st.store
+        .asset_history(&asset, before, CHAIN_PAGE)
+        .map_err(internal)?
+        .into_iter()
+        .map(|(h, _, txid)| {
+            let (tx, _) = st.store.transaction(&txid).map_err(internal)?.ok_or_else(|| internal("indexed tx missing"))?;
+            tx_json(st, &tx, Some(h))
+        })
+        .collect()
+}
+
+async fn asset_txs_chain(State(st): State<NodeState>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    blocking(st, move |st| Ok(Json(json!(asset_chain_txs(st, &id, None)?)))).await
+}
+
+async fn asset_txs_chain_after(State(st): State<NodeState>, Path((id, last)): Path<(String, String)>) -> ApiResult<Json<Value>> {
+    blocking(st, move |st| Ok(Json(json!(asset_chain_txs(st, &id, Some(parse_txid(&last)?))?)))).await
 }
 
 async fn mempool_txids(State(st): State<NodeState>) -> Json<Value> {

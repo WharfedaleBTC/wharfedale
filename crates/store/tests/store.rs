@@ -239,4 +239,37 @@ mod wfa1 {
         }
         assert!(ok(&format!(r#"{{"name":"{}","ticker":"T","precision":0}}"#, "n".repeat(65))).is_none());
     }
+
+    /// A store indexed by an older node (another `index_version`) drops its query indexes on
+    /// open and rebuilds the same records from its blocks.
+    #[test]
+    fn an_old_index_is_rebuilt_on_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.redb");
+        let asset = {
+            let store = Store::open(&path).unwrap();
+            store.init_or_check(&super::genesis("a")).unwrap();
+            let named = issuance(1, sha(META), vec![taproot_out(), data_out(wfa1_script(META))]);
+            commit(&store, vec![named.clone()]);
+            named.input[0].issuance_ids().0
+        };
+        let before = Store::open(&path).unwrap().asset(&asset).unwrap().unwrap();
+        assert_eq!(before.tx_count, 1);
+        {
+            let db = redb::Database::open(&path).unwrap();
+            let txn = db.begin_write().unwrap();
+            {
+                let meta: redb::TableDefinition<&str, &[u8]> = redb::TableDefinition::new("meta");
+                txn.open_table(meta).unwrap().insert("index_version", b"1".as_slice()).unwrap();
+            }
+            txn.commit().unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.indexed_height().unwrap(), None);
+        assert!(store.asset(&asset).unwrap().is_none());
+        while store.index_next().unwrap().is_some() {}
+        assert_eq!(store.asset(&asset).unwrap().unwrap(), before);
+        assert_eq!(store.asset_history(&asset, None, 10).unwrap().len(), 1);
+        assert!(!store.check_index_version().unwrap());
+    }
 }

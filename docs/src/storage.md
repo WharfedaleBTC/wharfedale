@@ -49,9 +49,13 @@ Written by the indexer (`Store::index_next`, one block per write transaction):
 | `spk_history` | scripthash ‖ height (BE) ‖ position (BE) ‖ txid → () | `/scripthash/:hash/txs`, `/address/:a/txs` |
 | `spent_by` | outpoint → txid ‖ vin (LE) | `/tx/:txid/outspends` |
 | `assets` | asset id → JSON `AssetRecord` (below) | `/asset/:id`, wallet reissuance |
+| `asset_history` | asset id ‖ height (BE) ‖ position (BE) ‖ txid → () | `/asset/:id/txs/chain` |
 | `meta.indexed_height` | last indexed height | indexer cursor |
+| `meta.index_version` | version of these tables (`INDEX_VERSION`) | `Store::open` rebuilds on a mismatch |
 
-A script appears in `spk_history` for every transaction that pays it or spends from it.
+A script appears in `spk_history` for every transaction that pays it or spends from it. An
+issued asset appears in `asset_history` for every transaction that (re)issues it or burns it
+(an explicit `OP_RETURN` output of the asset), counted by `AssetRecord.tx_count`.
 
 `AssetRecord` (JSON):
 
@@ -62,6 +66,7 @@ A script appears in `spk_history` for every transaction that pays it or spends f
 | `contract_hash`, `entropy` | hex; `entropy` is needed to reissue |
 | `height` | block of the first issuance |
 | `issuance_count`, `issued_amount`, `has_blinded_issuances`, `reissuance_tokens` | totals over (re)issuances; amounts explicit only |
+| `tx_count` | transactions in `asset_history` |
 | `name`, `ticker`, `precision` | optional, from a [WFA1](rpc.md#asset-names-wfa1) output of the issuance transaction; never changed by reissuances. Missing in older records (decode as `null`) |
 
 `scripthash` = SHA-256(scriptPubKey), the Electrum/Esplora convention.
@@ -87,8 +92,10 @@ become UTXOs at height 0).
 
 A node task (`node.rs`) runs `Store::index_next` until it returns `None`, then waits for the next
 committed tip. Per block: read the block, resolve spent outputs through `tx_index`, update
-`spk_history`, `spent_by`, `assets`, advance `indexed_height` — one write transaction. It never
-blocks consensus and can be rebuilt by dropping the three tables and the cursor.
+`spk_history`, `spent_by`, `assets`, `asset_history`, advance `indexed_height` — one write
+transaction. It never blocks consensus. `Store::open` compares `meta.index_version` with
+`INDEX_VERSION` and, on a mismatch (a store from an older node), drops the four tables and the
+cursor; the indexer then rebuilds them from the stored blocks.
 
 ## Pruning
 

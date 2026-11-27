@@ -1,6 +1,10 @@
 //! Node services shared by RPC and gossip, and the Elements-compatible JSON-RPC server.
 //!
 //! Spec: `docs/src/rpc.md`.
+// A `MutexGuard` (the mempool) in an `if let`/`match` scrutinee lives through the whole block:
+// locking the pool again inside it deadlocks the thread (and then the node, which needs the pool
+// to commit). Bind the value first.
+#![deny(clippy::significant_drop_in_scrutinee)]
 #![forbid(unsafe_code)]
 
 mod esplora;

@@ -40,6 +40,7 @@ pub fn call(st: &NodeState, method: &str, params: &[Value]) -> Result<Value> {
     match method {
         "getblockchaininfo" => getblockchaininfo(st),
         "getblockcount" => Ok(json!(st.store.tip().map_err(internal)?.0)),
+        "getindexinfo" => getindexinfo(st),
         "getblockhash" => getblockhash(st, params),
         "getblock" => getblock(st, params),
         "getblockheader" => getblockheader(st, params),
@@ -159,16 +160,29 @@ fn tx_json(tx: &Transaction) -> Value {
 
 fn getblockchaininfo(st: &NodeState) -> Result<Value> {
     let (height, hash) = st.store.tip().map_err(internal)?;
-    let pool = st.pool();
+    let mempool_size = st.pool().len();
     Ok(json!({
         "chain": st.chain_id,
         "blocks": height,
         "bestblockhash": hash.to_string(),
         "genesis_hash": st.genesis_hash.to_string(),
         "fee_asset": st.fee_asset.to_string(),
-        "mempool_size": pool.len(),
+        "mempool_size": mempool_size,
         "role": st.role.as_str(),
+        // Bitcoin Core fields some tools check. Headers and bodies are committed together, the
+        // store never prunes, and there is no initial-block-download mode: a node serves the
+        // chain it has committed (compare `blocks` with a peer's to see whether it is behind).
+        "headers": height,
+        "pruned": false,
+        "initialblockdownload": false,
     }))
+}
+
+/// Bitcoin Core's `getindexinfo`: the transaction index is written with each block, so it is
+/// always at the tip.
+fn getindexinfo(st: &NodeState) -> Result<Value> {
+    let (height, _) = st.store.tip().map_err(internal)?;
+    Ok(json!({ "txindex": { "synced": true, "best_block_height": height } }))
 }
 
 /// Async (asks the p2p layer); called by the server outside `call`.
@@ -273,7 +287,10 @@ fn getrawtransaction(st: &NodeState, params: &[Value]) -> Result<Value> {
     v["hex"] = json!(hex::encode(encode::serialize(&tx)));
     if let Some(h) = height {
         let (tip, _) = st.store.tip().map_err(internal)?;
+        let header = st.store.header(h).map_err(internal)?.ok_or_else(|| internal("missing block header"))?;
+        v["blockhash"] = json!(header.hash().to_string());
         v["blockheight"] = json!(h);
+        v["blocktime"] = json!(header.timestamp);
         v["confirmations"] = json!(tip + 1 - h);
     } else {
         v["confirmations"] = json!(0);

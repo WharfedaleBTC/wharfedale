@@ -4,7 +4,7 @@
 use elements::confidential::Value;
 use elements::hashes::sha256;
 use elements::{AssetId, OutPoint, Script, Transaction, Txid};
-use redb::TableDefinition;
+use redb::{ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 
 use crate::codec::encode_outpoint;
@@ -16,6 +16,13 @@ pub(crate) const SPK_HISTORY: TableDefinition<&[u8], ()> = TableDefinition::new(
 pub(crate) const SPENT_BY: TableDefinition<&[u8], &[u8]> = TableDefinition::new("spent_by");
 /// asset id (32) → JSON `AssetRecord`
 pub(crate) const ASSETS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("assets");
+/// asset id (32) ‖ height (u64 BE) ‖ position (u32 BE) ‖ txid (32) → (): the transactions that
+/// issue, reissue or burn the asset (Esplora's asset history).
+pub(crate) const ASSET_HISTORY: TableDefinition<&[u8], ()> = TableDefinition::new("asset_history");
+
+/// Version of the query indexes. A store with another version drops them and rebuilds them
+/// from its blocks ([`Store::check_index_version`]).
+pub(crate) const INDEX_VERSION: &[u8] = b"2";
 
 /// SHA-256 of a scriptPubKey (Esplora `scripthash`).
 pub fn script_hash(spk: &Script) -> [u8; 32] {
@@ -35,6 +42,10 @@ pub struct AssetRecord {
     pub entropy: String,
     pub height: u64,
     pub issuance_count: u64,
+    /// Transactions in the asset's history: (re)issuances and burns (an explicit `OP_RETURN`
+    /// output of the asset).
+    #[serde(default)]
+    pub tx_count: u64,
     /// Sum of explicit (re)issued amounts.
     pub issued_amount: u64,
     pub has_blinded_issuances: bool,
@@ -127,9 +138,12 @@ impl Store {
         let mut rows: Vec<(Vec<u8>, ())> = Vec::new();
         let mut spent: Vec<([u8; 36], Vec<u8>)> = Vec::new();
         let mut assets: Vec<AssetRecord> = Vec::new();
+        let mut asset_rows: Vec<Vec<u8>> = Vec::new();
+        let mut touched: Vec<AssetId> = Vec::new();
         for (pos, tx) in block.txs.iter().enumerate() {
             let txid = tx.txid();
             history.clear();
+            touched.clear();
             for out in &tx.output {
                 if !out.script_pubkey.is_empty() {
                     history.push(script_hash(&out.script_pubkey));
@@ -146,7 +160,29 @@ impl Store {
                     history.push(script_hash(&prev.script_pubkey));
                 }
                 if !input.asset_issuance.is_null() {
-                    assets.push(self.asset_update(tx, vin, next, &assets)?);
+                    let record = self.asset_update(tx, vin, next, &assets)?;
+                    touched.push(record.asset_id.parse().map_err(|_| StoreError::Corrupt("asset id"))?);
+                    assets.push(record);
+                }
+            }
+            // Burns: explicit OP_RETURN outputs of an issued asset.
+            for out in &tx.output {
+                if let (true, elements::confidential::Asset::Explicit(id)) = (out.script_pubkey.is_op_return(), out.asset) {
+                    touched.push(id);
+                }
+            }
+            touched.sort_unstable();
+            touched.dedup();
+            for id in &touched {
+                let existing = match assets.iter().rev().find(|r| r.asset_id == id.to_string()) {
+                    Some(r) => Some(r.clone()),
+                    None => self.asset(id)?,
+                };
+                // A burn of an asset never issued on this chain (the fee asset) has no history.
+                if let Some(mut record) = existing {
+                    record.tx_count += 1;
+                    assets.push(record);
+                    asset_rows.push(history_key(&id.to_byte_array(), next, pos as u32, &txid));
                 }
             }
             history.sort_unstable();
@@ -166,6 +202,10 @@ impl Store {
             for (k, v) in &spent {
                 s.insert(k.as_slice(), v.as_slice()).map_err(dberr)?;
             }
+            let mut ah = txn.open_table(ASSET_HISTORY).map_err(dberr)?;
+            for k in &asset_rows {
+                ah.insert(k.as_slice(), ()).map_err(dberr)?;
+            }
             let mut a = txn.open_table(ASSETS).map_err(dberr)?;
             for rec in &assets {
                 let id: AssetId = rec.asset_id.parse().map_err(|_| StoreError::Corrupt("asset id"))?;
@@ -180,10 +220,43 @@ impl Store {
 
     /// Confirmed transactions touching `script_hash`, newest first: `(height, position, txid)`.
     pub fn script_history(&self, sh: &[u8; 32], before: Option<(u64, u32)>, limit: usize) -> Result<Vec<(u64, u32, Txid)>> {
+        self.history_page(SPK_HISTORY, sh, before, limit)
+    }
+
+    /// Confirmed transactions in `asset`'s history ((re)issuances and burns), newest first:
+    /// `(height, position, txid)`.
+    pub fn asset_history(&self, asset: &AssetId, before: Option<(u64, u32)>, limit: usize) -> Result<Vec<(u64, u32, Txid)>> {
+        self.history_page(ASSET_HISTORY, &asset.to_byte_array(), before, limit)
+    }
+
+    /// Number of confirmed transactions touching `script_hash`.
+    pub fn script_tx_count(&self, sh: &[u8; 32]) -> Result<u64> {
         let txn = self.db.begin_read().map_err(dberr)?;
         let table = txn.open_table(SPK_HISTORY).map_err(dberr)?;
         let lo = sh.to_vec();
         let mut hi = sh.to_vec();
+        hi.extend_from_slice(&[0xff; 45]);
+        let mut n = 0u64;
+        for item in table.range::<&[u8]>(lo.as_slice()..hi.as_slice()).map_err(dberr)? {
+            item.map_err(dberr)?;
+            n += 1;
+        }
+        Ok(n)
+    }
+
+    /// Rows `key (32) ‖ height ‖ position ‖ txid` of `table`, newest first, strictly before
+    /// `before` when given.
+    fn history_page(
+        &self,
+        table: TableDefinition<&[u8], ()>,
+        key: &[u8; 32],
+        before: Option<(u64, u32)>,
+        limit: usize,
+    ) -> Result<Vec<(u64, u32, Txid)>> {
+        let txn = self.db.begin_read().map_err(dberr)?;
+        let table = txn.open_table(table).map_err(dberr)?;
+        let lo = key.to_vec();
+        let mut hi = key.to_vec();
         match before {
             Some((h, p)) => {
                 hi.extend_from_slice(&h.to_be_bytes());
@@ -205,6 +278,30 @@ impl Store {
         Ok(out)
     }
 
+    /// Drops the query indexes and their cursor if they were built by another
+    /// [`INDEX_VERSION`]; the indexer then rebuilds them from the stored blocks.
+    pub fn check_index_version(&self) -> Result<bool> {
+        if self.meta("index_version")?.as_deref() == Some(INDEX_VERSION) {
+            return Ok(false);
+        }
+        let txn = self.db.begin_write().map_err(dberr)?;
+        {
+            txn.delete_table(SPK_HISTORY).map_err(dberr)?;
+            txn.delete_table(SPENT_BY).map_err(dberr)?;
+            txn.delete_table(ASSETS).map_err(dberr)?;
+            txn.delete_table(ASSET_HISTORY).map_err(dberr)?;
+            txn.open_table(SPK_HISTORY).map_err(dberr)?;
+            txn.open_table(SPENT_BY).map_err(dberr)?;
+            txn.open_table(ASSETS).map_err(dberr)?;
+            txn.open_table(ASSET_HISTORY).map_err(dberr)?;
+            let mut meta = txn.open_table(META).map_err(dberr)?;
+            meta.remove("indexed_height").map_err(dberr)?;
+            meta.insert("index_version", INDEX_VERSION).map_err(dberr)?;
+        }
+        txn.commit().map_err(dberr)?;
+        Ok(true)
+    }
+
     /// The transaction input that spent `outpoint`, if indexed.
     pub fn spent_by(&self, outpoint: &OutPoint) -> Result<Option<(Txid, u32)>> {
         let txn = self.db.begin_read().map_err(dberr)?;
@@ -213,6 +310,20 @@ impl Store {
             let v = v.value();
             (Txid::from_byte_array(v[..32].try_into().expect("layout")), u32::from_le_bytes(v[32..36].try_into().expect("layout")))
         }))
+    }
+
+    /// Every indexed asset, in key order (callers sort as they need).
+    pub fn assets(&self) -> Result<Vec<AssetRecord>> {
+        let txn = self.db.begin_read().map_err(dberr)?;
+        let table = txn.open_table(ASSETS).map_err(dberr)?;
+        table
+            .iter()
+            .map_err(dberr)?
+            .map(|entry| {
+                let (_, value) = entry.map_err(dberr)?;
+                serde_json::from_slice(value.value()).map_err(|_| StoreError::Corrupt("asset record"))
+            })
+            .collect()
     }
 
     pub fn asset(&self, id: &AssetId) -> Result<Option<AssetRecord>> {
@@ -271,6 +382,7 @@ impl Store {
                     entropy: hex::encode(entropy.to_byte_array()),
                     height,
                     issuance_count: 1,
+                    tx_count: 0,
                     issued_amount: amount,
                     has_blinded_issuances: blinded,
                     reissuance_tokens: tokens,
